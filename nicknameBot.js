@@ -2,6 +2,22 @@
 // PUBLIC MULTI-SERVER DISCORD NICKNAME MANAGEMENT BOT
 // discord.js v14
 // Railway Ready
+//
+// FEATURES
+// - Multi-server support
+// - Per-server configuration
+// - Nickname request channel
+// - Moderator approval/rejection
+// - Reject reason modal
+// - Automatic starting-variable protection
+// - Bot-approved starting variables are allowed
+// - Manual starting variables are automatically removed
+// - RESET / reset / Reset support
+// - Reset uses cleaned Discord username
+// - Nickname history
+// - Moderator logs
+// - User DM notifications
+// - Railway health endpoint
 // ============================================================
 
 require("dotenv").config();
@@ -22,7 +38,10 @@ const {
   REST,
   Routes,
   SlashCommandBuilder,
-  ChannelType
+  ChannelType,
+  ModalBuilder,
+  TextInputBuilder,
+  TextInputStyle
 } = require("discord.js");
 
 // ============================================================
@@ -81,15 +100,9 @@ const HISTORY_FILE = path.join(
 // JSON HELPERS
 // ============================================================
 
-function loadJSON(
-  file,
-  fallback
-) {
-
+function loadJSON(file, fallback) {
   try {
-
     if (!fs.existsSync(file)) {
-
       fs.writeFileSync(
         file,
         JSON.stringify(
@@ -102,11 +115,10 @@ function loadJSON(
       return fallback;
     }
 
-    const data =
-      fs.readFileSync(
-        file,
-        "utf8"
-      );
+    const data = fs.readFileSync(
+      file,
+      "utf8"
+    );
 
     if (!data.trim()) {
       return fallback;
@@ -115,7 +127,6 @@ function loadJSON(
     return JSON.parse(data);
 
   } catch (error) {
-
     console.error(
       `❌ Failed to load ${file}:`,
       error
@@ -125,13 +136,8 @@ function loadJSON(
   }
 }
 
-function saveJSON(
-  file,
-  data
-) {
-
+function saveJSON(file, data) {
   try {
-
     fs.writeFileSync(
       file,
       JSON.stringify(
@@ -144,7 +150,6 @@ function saveJSON(
     return true;
 
   } catch (error) {
-
     console.error(
       `❌ Failed to save ${file}:`,
       error
@@ -175,7 +180,6 @@ let nickHistory =
 // ============================================================
 
 function saveConfigs() {
-
   saveJSON(
     CONFIG_FILE,
     guildConfigs
@@ -183,7 +187,6 @@ function saveConfigs() {
 }
 
 function saveHistory() {
-
   saveJSON(
     HISTORY_FILE,
     nickHistory
@@ -195,40 +198,32 @@ function saveHistory() {
 // ============================================================
 
 function createDefaultConfig() {
-
   return {
+    requestChannelId: null,
 
-    requestChannelId:
-      null,
-
-    logChannelId:
-      null,
+    logChannelId: null,
 
     // Roles allowed to approve/reject
-    approverRoleIds:
-      [],
-
-    // Roles allowed to use starting variables
-    variableAllowedRoleIds:
-      [],
-
-    // Protect starting variables
-    variableProtection:
-      true
+    approverRoleIds: []
   };
 }
 
-function getGuildConfig(
-  guildId
-) {
-
+function getGuildConfig(guildId) {
   if (!guildConfigs[guildId]) {
-
     guildConfigs[guildId] =
       createDefaultConfig();
 
     saveConfigs();
   }
+
+  // Make sure old configs still work
+  const defaults =
+    createDefaultConfig();
+
+  guildConfigs[guildId] = {
+    ...defaults,
+    ...guildConfigs[guildId]
+  };
 
   return guildConfigs[guildId];
 }
@@ -237,10 +232,7 @@ function getGuildConfig(
 // HELPERS
 // ============================================================
 
-function isAdmin(
-  member
-) {
-
+function isAdmin(member) {
   if (!member) {
     return false;
   }
@@ -258,7 +250,6 @@ function hasAnyRole(
   member,
   roleIds = []
 ) {
-
   if (!member) {
     return false;
   }
@@ -279,7 +270,6 @@ function canApprove(
   member,
   config
 ) {
-
   return (
     isAdmin(member) ||
     hasAnyRole(
@@ -290,54 +280,33 @@ function canApprove(
 }
 
 // ============================================================
-// VARIABLE ROLE
-// ============================================================
-
-function canUseStartingVariable(
-  member,
-  config
-) {
-
-  return (
-    isAdmin(member) ||
-    hasAnyRole(
-      member,
-      config.variableAllowedRoleIds
-    )
-  );
-}
-
-// ============================================================
-// REMOVE STARTING VARIABLES
+// STARTING VARIABLE REMOVER
 // ============================================================
 //
-// Removes ONLY special characters / symbols / emoji
-// from the START of nickname.
+// IMPORTANT:
+//
+// ONLY STARTING special characters / emoji / symbols
+// are removed.
 //
 // Examples:
 //
-// ★ Shakin       -> Shakin
-// 🔥 Shakin      -> Shakin
-// 『Shakin       -> Shakin
-// !Shakin        -> Shakin
-// `Shakin        -> Shakin
-// ~Shakin        -> Shakin
-// "Shakin        -> Shakin
-// 'Shakin        -> Shakin
-// !. Homo        -> Homo
+// 🔥Homo       -> Homo
+// ★ Shakin     -> Shakin
+// 『Homo       -> Homo
+// !Homo        -> Homo
+// ~Homo        -> Homo
 //
 // Middle/end:
 //
-// Shakin!        -> Shakin!
-// Sha★kin        -> Sha★kin
-// Homo★          -> Homo★
+// Homo★        -> Homo★
+// Ho★mo        -> Ho★mo
+// Homo!        -> Homo!
 //
 // ============================================================
 
 function removeStartingVariables(
   nickname
 ) {
-
   if (!nickname) {
     return nickname;
   }
@@ -355,33 +324,63 @@ function removeStartingVariables(
 }
 
 // ============================================================
-// NORMALIZE NICKNAME
+// CLEAN DEFAULT USERNAME
+// ============================================================
+//
+// Discord username = default/main account name.
+//
+// Example:
+//
+// 🔥Homo
+// ↓
+// Homo
+//
+// This is used when RESET is requested.
+//
+// ============================================================
+
+function getCleanDefaultNickname(
+  member
+) {
+  if (!member || !member.user) {
+    return null;
+  }
+
+  const username =
+    member.user.username ||
+    "";
+
+  const cleaned =
+    removeStartingVariables(
+      username
+    );
+
+  return cleaned || username;
+}
+
+// ============================================================
+// NORMALIZE REQUESTED NICKNAME
+// ============================================================
+//
+// Starting variables are NOT allowed in normal manual requests.
+//
+// BUT:
+//
+// If a moderator approves the request,
+// the exact final nickname is applied by the bot.
+//
+// That bot-set nickname is temporarily marked as
+// an authorized bot change so guildMemberUpdate
+// does not remove the variable again.
+//
 // ============================================================
 
 function normalizeNickname(
-  member,
-  nickname,
-  config
+  nickname
 ) {
-
-  let result =
-    nickname.trim();
-
-  if (
-    config.variableProtection &&
-    !canUseStartingVariable(
-      member,
-      config
-    )
-  ) {
-
-    result =
-      removeStartingVariables(
-        result
-      );
-  }
-
-  return result.trim();
+  return removeStartingVariables(
+    nickname
+  );
 }
 
 // ============================================================
@@ -391,16 +390,13 @@ function normalizeNickname(
 function validateNickname(
   nickname
 ) {
-
   if (!nickname) {
-
     return (
       "❌ Nickname cannot be empty."
     );
   }
 
   if (nickname.length > 32) {
-
     return (
       "❌ Nickname cannot be longer than **32 characters**."
     );
@@ -417,7 +413,6 @@ function historyKey(
   guildId,
   userId
 ) {
-
   return `${guildId}:${userId}`;
 }
 
@@ -429,15 +424,93 @@ const pendingRequests =
   new Map();
 
 // ============================================================
+// BOT AUTHORIZED NICKNAME CHANGES
+// ============================================================
+//
+// guildMemberUpdate cannot automatically know whether
+// a nickname was changed manually or by this bot.
+//
+// So before bot changes a nickname:
+//
+// guildId:userId -> expectedNickname
+//
+// Then guildMemberUpdate sees the change and allows it.
+//
+// ============================================================
+
+const authorizedBotChanges =
+  new Map();
+
+function botChangeKey(
+  guildId,
+  userId
+) {
+  return `${guildId}:${userId}`;
+}
+
+function markBotNicknameChange(
+  guildId,
+  userId,
+  nickname
+) {
+  authorizedBotChanges.set(
+    botChangeKey(
+      guildId,
+      userId
+    ),
+    nickname
+  );
+}
+
+function consumeBotNicknameChange(
+  guildId,
+  userId,
+  nickname
+) {
+  const key =
+    botChangeKey(
+      guildId,
+      userId
+    );
+
+  const expected =
+    authorizedBotChanges.get(
+      key
+    );
+
+  if (
+    expected === undefined
+  ) {
+    return false;
+  }
+
+  if (
+    expected === nickname
+  ) {
+    authorizedBotChanges.delete(
+      key
+    );
+
+    return true;
+  }
+
+  // If something else changed the nickname,
+  // do not trust the old bot marker.
+  authorizedBotChanges.delete(
+    key
+  );
+
+  return false;
+}
+
+// ============================================================
 // REQUEST ID
 // ============================================================
 
 function createRequestId() {
-
   let id;
 
   do {
-
     id =
       "REQ-" +
       Math.random()
@@ -457,7 +530,6 @@ function createRequestId() {
 // ============================================================
 
 function footer() {
-
   return {
     text:
       "Nickname Management System"
@@ -473,9 +545,7 @@ async function sendLog(
   config,
   embed
 ) {
-
   try {
-
     if (!config.logChannelId) {
       return;
     }
@@ -485,7 +555,10 @@ async function sendLog(
         config.logChannelId
       );
 
-    if (!channel) {
+    if (
+      !channel ||
+      !channel.isTextBased()
+    ) {
       return;
     }
 
@@ -494,7 +567,6 @@ async function sendLog(
     });
 
   } catch (error) {
-
     console.error(
       "❌ Failed to send log:",
       error.message ||
@@ -514,9 +586,7 @@ async function sendAutoRemoveLog(
   oldNickname,
   cleanNickname
 ) {
-
   try {
-
     if (!config.logChannelId) {
       return;
     }
@@ -526,20 +596,27 @@ async function sendAutoRemoveLog(
         config.logChannelId
       );
 
-    if (!channel) {
+    if (
+      !channel ||
+      !channel.isTextBased()
+    ) {
       return;
     }
 
     const embed =
       new EmbedBuilder()
-        .setColor(0xffb84d)
+        .setColor(
+          0xffb84d
+        )
         .setTitle(
-          "🧹 Unauthorized Starting Variable Removed"
+          "🧹 Unauthorized Variable Removed"
         )
         .setThumbnail(
           member.displayAvatarURL({
-            extension: "png",
-            size: 256
+            extension:
+              "png",
+            size:
+              256
           })
         )
         .addFields(
@@ -548,7 +625,8 @@ async function sendAutoRemoveLog(
               "👤 Member",
             value:
               `${member}`,
-            inline: true
+            inline:
+              true
           },
           {
             name:
@@ -556,21 +634,24 @@ async function sendAutoRemoveLog(
             value:
               oldNickname ||
               member.user.username,
-            inline: false
+            inline:
+              false
           },
           {
             name:
               "🆕 New Nickname",
             value:
               cleanNickname,
-            inline: false
+            inline:
+              false
           },
           {
             name:
               "📌 Action",
             value:
-              "Starting variable automatically removed.",
-            inline: false
+              "Starting variable was automatically removed because it was not set through the bot.",
+            inline:
+              false
           }
         )
         .setFooter(
@@ -583,13 +664,63 @@ async function sendAutoRemoveLog(
     });
 
   } catch (error) {
-
     console.error(
       "❌ Failed to send auto-remove log:",
       error.message ||
       error
     );
   }
+}
+
+// ============================================================
+// SAVE NICKNAME HISTORY
+// ============================================================
+
+function saveOldNickname(
+  guild,
+  member
+) {
+  const key =
+    historyKey(
+      guild.id,
+      member.id
+    );
+
+  nickHistory[key] = {
+    guildId:
+      guild.id,
+
+    userId:
+      member.id,
+
+    nickname:
+      member.nickname ||
+      member.user.username,
+
+    savedAt:
+      Date.now()
+  };
+
+  saveHistory();
+}
+
+// ============================================================
+// CHECK BOT NICKNAME PERMISSION
+// ============================================================
+
+function botCanManageNickname(
+  guild
+) {
+  const botMember =
+    guild.members.me;
+
+  if (!botMember) {
+    return false;
+  }
+
+  return botMember.permissions.has(
+    PermissionsBitField.Flags.ManageNicknames
+  );
 }
 
 // ============================================================
@@ -603,7 +734,9 @@ const commands = [
   // ==========================================================
 
   new SlashCommandBuilder()
-    .setName("nicksetup")
+    .setName(
+      "nicksetup"
+    )
     .setDescription(
       "Configure nickname system for this server."
     )
@@ -701,69 +834,6 @@ const commands = [
         )
     )
 
-    // Variable role add
-    .addSubcommand(sub =>
-      sub
-        .setName(
-          "variable-role-add"
-        )
-        .setDescription(
-          "Allow a role to use starting variables."
-        )
-        .addRoleOption(option =>
-          option
-            .setName(
-              "role"
-            )
-            .setDescription(
-              "Variable allowed role."
-            )
-            .setRequired(true)
-        )
-    )
-
-    // Variable role remove
-    .addSubcommand(sub =>
-      sub
-        .setName(
-          "variable-role-remove"
-        )
-        .setDescription(
-          "Remove a variable allowed role."
-        )
-        .addRoleOption(option =>
-          option
-            .setName(
-              "role"
-            )
-            .setDescription(
-              "Role to remove."
-            )
-            .setRequired(true)
-        )
-    )
-
-    // Variable protection
-    .addSubcommand(sub =>
-      sub
-        .setName(
-          "variable-protection"
-        )
-        .setDescription(
-          "Enable or disable variable protection."
-        )
-        .addBooleanOption(option =>
-          option
-            .setName(
-              "enabled"
-            )
-            .setDescription(
-              "Enable variable protection?"
-            )
-            .setRequired(true)
-        )
-    )
-
     // Show config
     .addSubcommand(sub =>
       sub
@@ -822,20 +892,11 @@ const rest =
 // ============================================================
 // REGISTER COMMANDS PER SERVER
 // ============================================================
-//
-// Public multi-server bot.
-//
-// Every server gets its own slash commands.
-// No server configuration/data is shared.
-//
-// ============================================================
 
 async function registerGuildCommands(
   guild
 ) {
-
   try {
-
     await rest.put(
       Routes.applicationGuildCommands(
         client.user.id,
@@ -852,7 +913,6 @@ async function registerGuildCommands(
     );
 
   } catch (error) {
-
     console.error(
       `❌ Slash command registration failed in ${guild.name} (${guild.id}):`,
       error.message ||
@@ -864,42 +924,32 @@ async function registerGuildCommands(
 // ============================================================
 // SCAN SERVER MEMBERS
 // ============================================================
+//
+// Existing members are checked when:
+// - Bot starts
+// - Bot joins server
+//
+// Any unauthorized starting variable is removed.
+//
+// ============================================================
 
 async function scanGuildMembers(
   guild
 ) {
-
   try {
-
     const config =
       getGuildConfig(
         guild.id
       );
 
-    if (
-      !config.variableProtection
-    ) {
-      console.log(
-        `ℹ️ Variable protection OFF in ${guild.name}`
-      );
-
-      return;
-    }
-
     console.log(
       `🔎 Scanning members in ${guild.name}...`
     );
-
-    const members =
-      await guild.members.fetch();
-
-    let changed = 0;
 
     const botMember =
       guild.members.me;
 
     if (!botMember) {
-
       console.log(
         `⚠️ Bot member unavailable in ${guild.name}`
       );
@@ -907,10 +957,26 @@ async function scanGuildMembers(
       return;
     }
 
+    if (
+      !botMember.permissions.has(
+        PermissionsBitField.Flags.ManageNicknames
+      )
+    ) {
+      console.log(
+        `⚠️ Missing Manage Nicknames permission in ${guild.name}`
+      );
+
+      return;
+    }
+
+    const members =
+      await guild.members.fetch();
+
+    let changed = 0;
+
     for (
       const member of members.values()
     ) {
-
       try {
 
         // Ignore bots
@@ -927,28 +993,12 @@ async function scanGuildMembers(
           continue;
         }
 
-        // Allowed role
-        if (
-          canUseStartingVariable(
-            member,
-            config
-          )
-        ) {
-          continue;
-        }
-
-        // Remove starting variables
         const cleanNickname =
           removeStartingVariables(
             member.nickname
           );
 
-        if (
-          !cleanNickname
-        ) {
-          continue;
-        }
-
+        // Nothing to clean
         if (
           cleanNickname ===
           member.nickname
@@ -969,7 +1019,6 @@ async function scanGuildMembers(
           member.roles.highest.position >=
           botMember.roles.highest.position
         ) {
-
           console.log(
             `⚠️ Cannot change ${member.user.tag} in ${guild.name} - role hierarchy`
           );
@@ -979,6 +1028,12 @@ async function scanGuildMembers(
 
         const oldNickname =
           member.nickname;
+
+        markBotNicknameChange(
+          guild.id,
+          member.id,
+          cleanNickname
+        );
 
         await member.setNickname(
           cleanNickname,
@@ -999,7 +1054,6 @@ async function scanGuildMembers(
           cleanNickname
         );
 
-        // Small delay
         await new Promise(
           resolve =>
             setTimeout(
@@ -1009,7 +1063,6 @@ async function scanGuildMembers(
         );
 
       } catch (error) {
-
         console.error(
           `❌ Could not change ${member.user.tag}:`,
           error.message ||
@@ -1023,7 +1076,6 @@ async function scanGuildMembers(
     );
 
   } catch (error) {
-
     console.error(
       `❌ Member scan failed for ${guild.name}:`,
       error.message ||
@@ -1033,7 +1085,7 @@ async function scanGuildMembers(
 }
 
 // ============================================================
-// READY / CLIENT READY
+// READY
 // ============================================================
 
 client.once(
@@ -1069,27 +1121,19 @@ client.once(
         "online"
     });
 
-    // ========================================================
-    // REGISTER COMMANDS IN EVERY SERVER
-    // ========================================================
-
+    // Register commands
     for (
       const guild of client.guilds.cache.values()
     ) {
-
       await registerGuildCommands(
         guild
       );
     }
 
-    // ========================================================
-    // SCAN EVERY SERVER
-    // ========================================================
-
+    // Scan existing members
     for (
       const guild of client.guilds.cache.values()
     ) {
-
       await scanGuildMembers(
         guild
       );
@@ -1118,7 +1162,6 @@ client.on(
         if (
           !interaction.guild
         ) {
-
           return interaction.reply({
             content:
               "❌ This command can only be used inside a server.",
@@ -1138,7 +1181,6 @@ client.on(
           );
 
         if (!member) {
-
           return interaction.reply({
             content:
               "❌ Could not find your server membership.",
@@ -1147,11 +1189,9 @@ client.on(
           });
         }
 
-        // Only admins can configure
         if (
           !isAdmin(member)
         ) {
-
           return interaction.reply({
             content:
               "❌ Only server administrators can configure this bot.",
@@ -1250,7 +1290,6 @@ client.on(
                 role.id
               )
             ) {
-
               config.approverRoleIds.push(
                 role.id
               );
@@ -1297,109 +1336,6 @@ client.on(
           }
 
           // ----------------------------------------------------
-          // VARIABLE ROLE ADD
-          // ----------------------------------------------------
-
-          if (
-            sub ===
-            "variable-role-add"
-          ) {
-
-            const role =
-              interaction.options.getRole(
-                "role"
-              );
-
-            if (
-              !config.variableAllowedRoleIds.includes(
-                role.id
-              )
-            ) {
-
-              config.variableAllowedRoleIds.push(
-                role.id
-              );
-            }
-
-            saveConfigs();
-
-            return interaction.reply({
-              content:
-                `✅ ${role} can use special characters/emoji at the START of nicknames.`,
-              ephemeral:
-                true
-            });
-          }
-
-          // ----------------------------------------------------
-          // VARIABLE ROLE REMOVE
-          // ----------------------------------------------------
-
-          if (
-            sub ===
-            "variable-role-remove"
-          ) {
-
-            const role =
-              interaction.options.getRole(
-                "role"
-              );
-
-            config.variableAllowedRoleIds =
-              config.variableAllowedRoleIds.filter(
-                id =>
-                  id !== role.id
-              );
-
-            saveConfigs();
-
-            return interaction.reply({
-              content:
-                `✅ ${role} can no longer use starting variables.`,
-              ephemeral:
-                true
-            });
-          }
-
-          // ----------------------------------------------------
-          // VARIABLE PROTECTION
-          // ----------------------------------------------------
-
-          if (
-            sub ===
-            "variable-protection"
-          ) {
-
-            const enabled =
-              interaction.options.getBoolean(
-                "enabled"
-              );
-
-            config.variableProtection =
-              enabled;
-
-            saveConfigs();
-
-            // If protection enabled,
-            // immediately scan current members.
-            if (enabled) {
-
-              await scanGuildMembers(
-                guild
-              );
-            }
-
-            return interaction.reply({
-              content:
-                enabled
-                  ? "✅ Variable protection is now **ON**."
-                  : "⚠️ Variable protection is now **OFF**.",
-              ephemeral:
-                true
-            });
-          }
-
-          // ----------------------------------------------------
           // SHOW
           // ----------------------------------------------------
 
@@ -1420,18 +1356,6 @@ client.on(
                     )
                 : "Not configured";
 
-            const variableRoles =
-              config.variableAllowedRoleIds.length
-                ? config.variableAllowedRoleIds
-                    .map(
-                      id =>
-                        `<@&${id}>`
-                    )
-                    .join(
-                      ", "
-                    )
-                : "No roles configured";
-
             const embed =
               new EmbedBuilder()
                 .setColor(
@@ -1439,6 +1363,9 @@ client.on(
                 )
                 .setTitle(
                   "⚙️ Nickname System Configuration"
+                )
+                .setDescription(
+                  "All nickname variables are controlled by the bot. Members cannot manually keep starting variables."
                 )
                 .addFields(
                   {
@@ -1465,17 +1392,15 @@ client.on(
                   },
                   {
                     name:
-                      "✨ Variable Allowed Roles",
+                      "✨ Variable System",
                     value:
-                      variableRoles
+                      "🟢 Only bot-approved nicknames can keep starting variables."
                   },
                   {
                     name:
-                      "🛡️ Variable Protection",
+                      "🔄 Reset",
                     value:
-                      config.variableProtection
-                        ? "🟢 Enabled"
-                        : "🔴 Disabled"
+                      "Typing `reset` returns the member to their cleaned default username."
                   }
                 )
                 .setFooter(
@@ -1518,7 +1443,6 @@ client.on(
             );
 
           if (!channel) {
-
             return interaction.reply({
               content:
                 "❌ Request channel is not configured.\nUse `/nicksetup request-channel` first.",
@@ -1543,12 +1467,14 @@ client.on(
                   "",
                   "**Example:**",
                   "`Shakin Ahmed`",
+                  "`🔥 Shakin`",
                   "",
-                  "Your nickname request will be sent to the configured moderators.",
+                  "Starting variables can only remain if the nickname is approved through this bot.",
                   "",
-                  "⚠️ Members without a Variable Allowed Role cannot use special characters/emoji at the **beginning** of their nickname.",
+                  "If you want to restore your default name, simply type:",
+                  "`reset`",
                   "",
-                  "Special characters in the **middle or end** are allowed."
+                  "The reset command works regardless of capitalization."
                 ].join(
                   "\n"
                 )
@@ -1586,149 +1512,161 @@ client.on(
         const customId =
           interaction.customId;
 
+        // ======================================================
+        // REJECT BUTTON
+        // ======================================================
+
         if (
-          !customId.startsWith(
-            "nick_accept_"
-          ) &&
-          !customId.startsWith(
+          customId.startsWith(
             "nick_reject_"
           )
         ) {
-          return;
-        }
 
-        const requestId =
-          customId.startsWith(
-            "nick_accept_"
-          )
-            ? customId.replace(
-                "nick_accept_",
-                ""
+          const requestId =
+            customId.replace(
+              "nick_reject_",
+              ""
+            );
+
+          const request =
+            pendingRequests.get(
+              requestId
+            );
+
+          if (!request) {
+            return interaction.reply({
+              content:
+                "⚠️ This nickname request is no longer active. It may have expired or the bot may have restarted.",
+              ephemeral:
+                true
+            });
+          }
+
+          const guild =
+            interaction.guild;
+
+          if (!guild) {
+            return interaction.reply({
+              content:
+                "❌ This request is no longer associated with a server.",
+              ephemeral:
+                true
+            });
+          }
+
+          if (
+            request.guildId !==
+            guild.id
+          ) {
+            return interaction.reply({
+              content:
+                "❌ This request belongs to another server.",
+              ephemeral:
+                true
+            });
+          }
+
+          const config =
+            getGuildConfig(
+              guild.id
+            );
+
+          const moderator =
+            await guild.members.fetch(
+              interaction.user.id
+            ).catch(
+              () => null
+            );
+
+          if (!moderator) {
+            return interaction.reply({
+              content:
+                "❌ Could not find your server membership.",
+              ephemeral:
+                true
+            });
+          }
+
+          if (
+            !canApprove(
+              moderator,
+              config
+            )
+          ) {
+            return interaction.reply({
+              content:
+                "❌ You do not have permission to reject nickname requests.",
+              ephemeral:
+                true
+            });
+          }
+
+          if (
+            request.status !==
+            "pending"
+          ) {
+            return interaction.reply({
+              content:
+                "⚠️ This request has already been processed.",
+              ephemeral:
+                true
+            });
+          }
+
+          // ====================================================
+          // REJECT REASON MODAL
+          // ====================================================
+
+          const modal =
+            new ModalBuilder()
+              .setCustomId(
+                `nick_reject_reason_${requestId}`
               )
-            : customId.replace(
-                "nick_reject_",
-                ""
+              .setTitle(
+                "Reject Nickname Request"
               );
 
-        const request =
-          pendingRequests.get(
-            requestId
+          const reasonInput =
+            new TextInputBuilder()
+              .setCustomId(
+                "reject_reason"
+              )
+              .setLabel(
+                "Why are you rejecting this request?"
+              )
+              .setPlaceholder(
+                "Example: Nickname does not follow server rules."
+              )
+              .setStyle(
+                TextInputStyle.Paragraph
+              )
+              .setMinLength(
+                3
+              )
+              .setMaxLength(
+                500
+              )
+              .setRequired(
+                true
+              );
+
+          const row =
+            new ActionRowBuilder()
+              .addComponents(
+                reasonInput
+              );
+
+          modal.addComponents(
+            row
           );
 
-        if (!request) {
-
-          return interaction.reply({
-            content:
-              "⚠️ This nickname request is no longer active. It may have expired or the bot may have restarted.",
-            ephemeral:
-              true
-          });
-        }
-
-        const guild =
-          interaction.guild;
-
-        if (!guild) {
-
-          return interaction.reply({
-            content:
-              "❌ This request is no longer associated with a server.",
-            ephemeral:
-              true
-          });
-        }
-
-        // Prevent cross-server processing
-        if (
-          request.guildId !==
-          guild.id
-        ) {
-
-          return interaction.reply({
-            content:
-              "❌ This request belongs to another server.",
-            ephemeral:
-              true
-          });
-        }
-
-        const config =
-          getGuildConfig(
-            guild.id
+          return interaction.showModal(
+            modal
           );
-
-        const moderator =
-          await guild.members.fetch(
-            interaction.user.id
-          ).catch(
-            () => null
-          );
-
-        if (!moderator) {
-
-          return interaction.reply({
-            content:
-              "❌ Could not find your server membership.",
-            ephemeral:
-              true
-          });
-        }
-
-        if (
-          !canApprove(
-            moderator,
-            config
-          )
-        ) {
-
-          return interaction.reply({
-            content:
-              "❌ You do not have permission to approve or reject nickname requests.",
-            ephemeral:
-              true
-          });
-        }
-
-        if (
-          request.status !==
-          "pending"
-        ) {
-
-          return interaction.reply({
-            content:
-              "⚠️ This request has already been processed.",
-            ephemeral:
-              true
-          });
-        }
-
-        request.status =
-          "processing";
-
-        await interaction.deferUpdate();
-
-        const member =
-          await guild.members.fetch(
-            request.userId
-          ).catch(
-            () => null
-          );
-
-        if (!member) {
-
-          pendingRequests.delete(
-            requestId
-          );
-
-          return interaction.message.edit({
-            content:
-              "❌ Member is no longer in this server.",
-            components: []
-          });
         }
 
         // ======================================================
-        // APPROVE
+        // APPROVE BUTTON
         // ======================================================
 
         if (
@@ -1736,6 +1674,122 @@ client.on(
             "nick_accept_"
           )
         ) {
+
+          const requestId =
+            customId.replace(
+              "nick_accept_",
+              ""
+            );
+
+          const request =
+            pendingRequests.get(
+              requestId
+            );
+
+          if (!request) {
+            return interaction.reply({
+              content:
+                "⚠️ This nickname request is no longer active. It may have expired or the bot may have restarted.",
+              ephemeral:
+                true
+            });
+          }
+
+          const guild =
+            interaction.guild;
+
+          if (!guild) {
+            return interaction.reply({
+              content:
+                "❌ This request is no longer associated with a server.",
+              ephemeral:
+                true
+            });
+          }
+
+          if (
+            request.guildId !==
+            guild.id
+          ) {
+            return interaction.reply({
+              content:
+                "❌ This request belongs to another server.",
+              ephemeral:
+                true
+            });
+          }
+
+          const config =
+            getGuildConfig(
+              guild.id
+            );
+
+          const moderator =
+            await guild.members.fetch(
+              interaction.user.id
+            ).catch(
+              () => null
+            );
+
+          if (!moderator) {
+            return interaction.reply({
+              content:
+                "❌ Could not find your server membership.",
+              ephemeral:
+                true
+            });
+          }
+
+          if (
+            !canApprove(
+              moderator,
+              config
+            )
+          ) {
+            return interaction.reply({
+              content:
+                "❌ You do not have permission to approve or reject nickname requests.",
+              ephemeral:
+                true
+            });
+          }
+
+          if (
+            request.status !==
+            "pending"
+          ) {
+            return interaction.reply({
+              content:
+                "⚠️ This request has already been processed.",
+              ephemeral:
+                true
+            });
+          }
+
+          request.status =
+            "processing";
+
+          await interaction.deferUpdate();
+
+          const member =
+            await guild.members.fetch(
+              request.userId
+            ).catch(
+              () => null
+            );
+
+          if (!member) {
+
+            pendingRequests.delete(
+              requestId
+            );
+
+            return interaction.message.edit({
+              content:
+                "❌ Member is no longer in this server.",
+              components: []
+            });
+          }
 
           try {
 
@@ -1743,9 +1797,18 @@ client.on(
               guild.members.me;
 
             if (!botMember) {
-
               throw new Error(
                 "Bot member unavailable."
+              );
+            }
+
+            if (
+              !botMember.permissions.has(
+                PermissionsBitField.Flags.ManageNicknames
+              )
+            ) {
+              throw new Error(
+                "Bot does not have the **Manage Nicknames** permission."
               );
             }
 
@@ -1753,9 +1816,8 @@ client.on(
               member.id ===
               guild.ownerId
             ) {
-
               throw new Error(
-                "Cannot change server owner's nickname."
+                "Cannot change the server owner's nickname."
               );
             }
 
@@ -1763,9 +1825,8 @@ client.on(
               member.roles.highest.position >=
               botMember.roles.highest.position
             ) {
-
               throw new Error(
-                "Member role is too high. Move the bot role above the member's highest role."
+                "Member role is too high. Move the bot's highest role above the member's highest role."
               );
             }
 
@@ -1773,29 +1834,20 @@ client.on(
             // SAVE OLD NICKNAME
             // ==================================================
 
-            const key =
-              historyKey(
-                guild.id,
-                member.id
-              );
+            saveOldNickname(
+              guild,
+              member
+            );
 
-            nickHistory[key] = {
+            // ==================================================
+            // AUTHORIZE BOT CHANGE
+            // ==================================================
 
-              guildId:
-                guild.id,
-
-              userId:
-                member.id,
-
-              nickname:
-                member.nickname ||
-                member.user.username,
-
-              savedAt:
-                Date.now()
-            };
-
-            saveHistory();
+            markBotNicknameChange(
+              guild.id,
+              member.id,
+              request.finalNickname
+            );
 
             // ==================================================
             // CHANGE NICKNAME
@@ -1869,6 +1921,16 @@ client.on(
                   },
                   {
                     name:
+                      "✨ Starting Variable",
+                    value:
+                      /^[^\p{L}\p{N}\s]/u.test(
+                        request.finalNickname
+                      )
+                        ? "🟢 Bot-approved variable allowed"
+                        : "None"
+                  },
+                  {
+                    name:
                       "📌 Status",
                     value:
                       "🟢 Approved"
@@ -1895,16 +1957,10 @@ client.on(
             // ==================================================
             // EDIT USER REQUEST MESSAGE
             // ==================================================
-            //
-            // No .messages.fetch()
-            // Therefore Read Message History is NOT required.
-            //
-            // ==================================================
 
             if (
               request.userMessage
             ) {
-
               await request.userMessage
                 .edit({
                   embeds: [
@@ -1987,146 +2043,296 @@ client.on(
           return;
         }
 
-        // ======================================================
-        // REJECT
-        // ======================================================
+        return;
+      }
+
+      // ========================================================
+      // MODAL SUBMIT
+      // ========================================================
+
+      if (
+        interaction.isModalSubmit()
+      ) {
 
         if (
-          customId.startsWith(
-            "nick_reject_"
+          !interaction.customId.startsWith(
+            "nick_reject_reason_"
           )
         ) {
+          return;
+        }
 
-          request.status =
-            "rejected";
+        const requestId =
+          interaction.customId.replace(
+            "nick_reject_reason_",
+            ""
+          );
 
-          const embed =
-            new EmbedBuilder()
-              .setColor(
-                0xff4e4e
-              )
-              .setTitle(
-                "❌ Nickname Request Rejected"
-              )
-              .setThumbnail(
-                member.displayAvatarURL({
-                  extension:
-                    "png",
-                  size:
-                    256
-                })
-              )
-              .addFields(
-                {
-                  name:
-                    "👤 User",
-                  value:
-                    `${member}`,
-                  inline:
-                    true
-                },
-                {
-                  name:
-                    "👮 Moderator",
-                  value:
-                    `${moderator}`,
-                  inline:
-                    true
-                },
-                {
-                  name:
-                    "🆔 Request ID",
-                  value:
-                    requestId,
-                  inline:
-                    true
-                },
-                {
-                  name:
-                    "🧾 Current Nickname",
-                  value:
-                    request.oldNickname ||
-                    member.user.username
-                },
-                {
-                  name:
-                    "🆕 Requested Nickname",
-                  value:
-                    request.requestedNickname
-                },
-                {
-                  name:
-                    "📌 Status",
-                  value:
-                    "🔴 Rejected"
-                }
-              )
-              .setFooter(
-                footer()
-              )
-              .setTimestamp();
+        const request =
+          pendingRequests.get(
+            requestId
+          );
 
-          // ==================================================
-          // EDIT MODERATOR MESSAGE
-          // ==================================================
-
-          await interaction.message.edit({
+        if (!request) {
+          return interaction.reply({
             content:
-              "❌ Request rejected.",
-            embeds: [
-              embed
-            ],
-            components: []
+              "⚠️ This nickname request is no longer active.",
+            ephemeral:
+              true
           });
+        }
 
-          // ==================================================
-          // EDIT USER REQUEST MESSAGE
-          // ==================================================
+        const guild =
+          interaction.guild;
 
-          if (
-            request.userMessage
-          ) {
+        if (!guild) {
+          return interaction.reply({
+            content:
+              "❌ This request is no longer associated with a server.",
+            ephemeral:
+              true
+          });
+        }
 
-            await request.userMessage
-              .edit({
-                embeds: [
-                  embed
-                ],
-                components: []
-              })
-              .catch(
-                () => {}
-              );
-          }
+        if (
+          request.guildId !==
+          guild.id
+        ) {
+          return interaction.reply({
+            content:
+              "❌ This request belongs to another server.",
+            ephemeral:
+              true
+          });
+        }
 
-          // ==================================================
-          // DM
-          // ==================================================
-
-          await member.send({
-            embeds: [
-              embed
-            ]
-          }).catch(
-            () => {}
+        const config =
+          getGuildConfig(
+            guild.id
           );
 
-          // ==================================================
-          // LOG
-          // ==================================================
-
-          await sendLog(
-            guild,
-            config,
-            embed
+        const moderator =
+          await guild.members.fetch(
+            interaction.user.id
+          ).catch(
+            () => null
           );
+
+        if (!moderator) {
+          return interaction.reply({
+            content:
+              "❌ Could not find your server membership.",
+            ephemeral:
+              true
+          });
+        }
+
+        if (
+          !canApprove(
+            moderator,
+            config
+          )
+        ) {
+          return interaction.reply({
+            content:
+              "❌ You do not have permission to reject nickname requests.",
+            ephemeral:
+              true
+          });
+        }
+
+        if (
+          request.status !==
+          "pending"
+        ) {
+          return interaction.reply({
+            content:
+              "⚠️ This request has already been processed.",
+            ephemeral:
+              true
+          });
+        }
+
+        const reason =
+          interaction.fields
+            .getTextInputValue(
+              "reject_reason"
+            )
+            .trim();
+
+        if (!reason) {
+          return interaction.reply({
+            content:
+              "❌ Rejection reason cannot be empty.",
+            ephemeral:
+              true
+          });
+        }
+
+        request.status =
+          "rejected";
+
+        const member =
+          await guild.members.fetch(
+            request.userId
+          ).catch(
+            () => null
+          );
+
+        if (!member) {
 
           pendingRequests.delete(
             requestId
           );
 
-          return;
+          return interaction.reply({
+            content:
+              "❌ Member is no longer in this server.",
+            ephemeral:
+              true
+          });
         }
+
+        // ======================================================
+        // REJECTED EMBED
+        // ======================================================
+
+        const embed =
+          new EmbedBuilder()
+            .setColor(
+              0xff4e4e
+            )
+            .setTitle(
+              "❌ Nickname Request Rejected"
+            )
+            .setThumbnail(
+              member.displayAvatarURL({
+                extension:
+                  "png",
+                size:
+                  256
+              })
+            )
+            .addFields(
+              {
+                name:
+                  "👤 User",
+                value:
+                  `${member}`,
+                inline:
+                  true
+              },
+              {
+                name:
+                  "👮 Moderator",
+                value:
+                  `${moderator}`,
+                inline:
+                  true
+              },
+              {
+                name:
+                  "🆔 Request ID",
+                value:
+                  requestId,
+                inline:
+                  true
+              },
+              {
+                name:
+                  "🧾 Current Nickname",
+                value:
+                  request.oldNickname ||
+                  member.user.username
+              },
+              {
+                name:
+                  "🆕 Requested Nickname",
+                value:
+                  request.requestedNickname
+              },
+              {
+                name:
+                  "📋 Rejection Reason",
+                value:
+                  reason
+              },
+              {
+                name:
+                  "📌 Status",
+                value:
+                  "🔴 Rejected"
+              }
+            )
+            .setFooter(
+              footer()
+            )
+            .setTimestamp();
+
+        // ======================================================
+        // EDIT MODERATOR MESSAGE
+        // ======================================================
+
+        await interaction.message.edit({
+          content:
+            "❌ Request rejected.",
+          embeds: [
+            embed
+          ],
+          components: []
+        });
+
+        // ======================================================
+        // EDIT USER REQUEST MESSAGE
+        // ======================================================
+
+        if (
+          request.userMessage
+        ) {
+          await request.userMessage
+            .edit({
+              embeds: [
+                embed
+              ],
+              components: []
+            })
+            .catch(
+              () => {}
+            );
+        }
+
+        // ======================================================
+        // DM USER
+        // ======================================================
+
+        await member.send({
+          embeds: [
+            embed
+          ]
+        }).catch(
+          () => {}
+        );
+
+        // ======================================================
+        // LOG
+        // ======================================================
+
+        await sendLog(
+          guild,
+          config,
+          embed
+        );
+
+        pendingRequests.delete(
+          requestId
+        );
+
+        return interaction.reply({
+          content:
+            "✅ Nickname request rejected and the reason has been recorded.",
+          ephemeral:
+            true
+        });
       }
 
     } catch (error) {
@@ -2170,11 +2376,17 @@ client.on(
 // MESSAGE CREATE
 // ============================================================
 //
-// Normal member simply types:
+// Member simply types:
 //
 // Shakin Ahmed
 //
-// No command required.
+// 🔥 Shakin
+//
+// reset
+//
+// RESET
+//
+// Reset
 //
 // ============================================================
 
@@ -2215,7 +2427,6 @@ client.on(
         message.channel.id !==
           config.requestChannelId
       ) {
-
         return;
       }
 
@@ -2242,14 +2453,257 @@ client.on(
       }
 
       // ========================================================
+      // BOT PERMISSION
+      // ========================================================
+
+      const botMember =
+        guild.members.me;
+
+      if (!botMember) {
+        return;
+      }
+
+      if (
+        !botMember.permissions.has(
+          PermissionsBitField.Flags.ManageNicknames
+        )
+      ) {
+        await message.channel.send({
+          content:
+            `${message.author} ❌ The bot does not have **Manage Nicknames** permission.`
+        }).catch(
+          () => {}
+        );
+
+        return;
+      }
+
+      // ========================================================
+      // RESET
+      // ========================================================
+      //
+      // reset / RESET / Reset / rEsEt
+      //
+      // All work.
+      //
+      // The nickname becomes the user's Discord username,
+      // but starting variables are removed.
+      //
+      // Example:
+      //
+      // Username: 🔥Homo
+      // Reset:
+      // Homo
+      //
+      // ========================================================
+
+      if (
+        /^reset$/i.test(
+          requestedNickname
+        )
+      ) {
+
+        // Server owner
+        if (
+          member.id ===
+          guild.ownerId
+        ) {
+
+          await message.channel.send({
+            content:
+              `${message.author} ❌ I cannot change the server owner's nickname.`
+          }).catch(
+            () => {}
+          );
+
+          return;
+        }
+
+        // Role hierarchy
+        if (
+          member.roles.highest.position >=
+          botMember.roles.highest.position
+        ) {
+
+          await message.channel.send({
+            content:
+              `${message.author} ❌ I cannot reset your nickname because your highest role is equal to or higher than my highest role.`
+          }).catch(
+            () => {}
+          );
+
+          return;
+        }
+
+        const defaultNickname =
+          getCleanDefaultNickname(
+            member
+          );
+
+        const validationError =
+          validateNickname(
+            defaultNickname
+          );
+
+        if (validationError) {
+
+          await message.channel.send({
+            content:
+              `${message.author} ${validationError}`
+          }).catch(
+            () => {}
+          );
+
+          return;
+        }
+
+        const oldNickname =
+          member.nickname ||
+          member.user.username;
+
+        // Save history
+        saveOldNickname(
+          guild,
+          member
+        );
+
+        // Mark as authorized bot change
+        markBotNicknameChange(
+          guild.id,
+          member.id,
+          defaultNickname
+        );
+
+        try {
+
+          await member.setNickname(
+            defaultNickname,
+            `Nickname reset by ${message.author.tag}`
+          );
+
+          const resetEmbed =
+            new EmbedBuilder()
+              .setColor(
+                0x4dff88
+              )
+              .setTitle(
+                "🔄 Nickname Reset"
+              )
+              .setThumbnail(
+                member.displayAvatarURL({
+                  extension:
+                    "png",
+                  size:
+                    256
+                })
+              )
+              .addFields(
+                {
+                  name:
+                    "👤 User",
+                  value:
+                    `${member}`,
+                  inline:
+                    true
+                },
+                {
+                  name:
+                    "🧾 Previous Nickname",
+                  value:
+                    oldNickname,
+                  inline:
+                    true
+                },
+                {
+                  name:
+                    "🆕 Default Nickname",
+                  value:
+                    defaultNickname,
+                  inline:
+                    true
+                },
+                {
+                  name:
+                    "📌 Action",
+                  value:
+                    "Starting variables were removed from the default username.",
+                  inline:
+                    false
+                }
+              )
+              .setFooter(
+                footer()
+              )
+              .setTimestamp();
+
+            await message.channel.send({
+              embeds: [
+                resetEmbed
+              ],
+              allowedMentions: {
+                users: []
+              }
+            }).catch(
+              () => {}
+            );
+
+            await sendLog(
+              guild,
+              config,
+              resetEmbed
+            );
+
+            await member.send({
+              embeds: [
+                resetEmbed
+              ]
+            }).catch(
+              () => {}
+            );
+
+          } catch (error) {
+
+            // Remove authorization marker
+            authorizedBotChanges.delete(
+              botChangeKey(
+                guild.id,
+                member.id
+              )
+            );
+
+            console.error(
+              "❌ Reset nickname error:",
+              error.message ||
+              error
+            );
+
+            await message.channel.send({
+              content:
+                `${message.author} ❌ Nickname reset failed.\n\n**Reason:** ${error.message}`
+            }).catch(
+              () => {}
+            );
+          }
+
+        } catch (error) {
+
+          console.error(
+            "❌ Reset error:",
+            error.message ||
+            error
+          );
+        }
+
+        return;
+      }
+
+      // ========================================================
       // NORMALIZE
       // ========================================================
 
       const finalNickname =
         normalizeNickname(
-          member,
-          requestedNickname,
-          config
+          requestedNickname
         );
 
       if (!finalNickname) {
@@ -2286,17 +2740,9 @@ client.on(
       }
 
       // ========================================================
-      // BOT HIERARCHY
+      // SERVER OWNER
       // ========================================================
 
-      const botMember =
-        guild.members.me;
-
-      if (!botMember) {
-        return;
-      }
-
-      // Server owner
       if (
         member.id ===
         guild.ownerId
@@ -2312,7 +2758,10 @@ client.on(
         return;
       }
 
-      // Role hierarchy
+      // ========================================================
+      // ROLE HIERARCHY
+      // ========================================================
+
       if (
         member.roles.highest.position >=
         botMember.roles.highest.position
@@ -2339,7 +2788,7 @@ client.on(
         member.nickname ||
         member.user.username;
 
-      const variableRemoved =
+      const startingVariableRemoved =
         requestedNickname !==
         finalNickname;
 
@@ -2399,7 +2848,7 @@ client.on(
             },
             {
               name:
-                "✅ Final Nickname",
+                "🔐 Final Nickname",
               value:
                 finalNickname
             },
@@ -2407,8 +2856,8 @@ client.on(
               name:
                 "✨ Starting Variable",
               value:
-                variableRemoved
-                  ? "⚠️ Removed automatically"
+                startingVariableRemoved
+                  ? "⚠️ Removed from request"
                   : "None",
               inline:
                 true
@@ -2436,14 +2885,6 @@ client.on(
 
       // ========================================================
       // USER MESSAGE
-      // ========================================================
-      //
-      // IMPORTANT:
-      // Do NOT use message.reply().
-      //
-      // message.channel.send() avoids Discord API 160002
-      // when Read Message History is not granted.
-      //
       // ========================================================
 
       const userReply =
@@ -2504,7 +2945,10 @@ client.on(
             )
           : null;
 
-      if (!logChannel) {
+      if (
+        !logChannel ||
+        !logChannel.isTextBased()
+      ) {
 
         await userReply.edit({
           embeds: [
@@ -2517,7 +2961,7 @@ client.on(
                 "⚠️ Nickname System Not Configured"
               )
               .setDescription(
-                "The nickname log channel has not been configured by the server administrator."
+                "The nickname log/moderator channel has not been configured by the server administrator."
               )
               .setFooter(
                 footer()
@@ -2630,8 +3074,6 @@ client.on(
 
           finalNickname,
 
-          // Keep actual Message object.
-          // This avoids messages.fetch() later.
           userMessage:
             userReply,
 
@@ -2739,25 +3181,25 @@ client.on(
 // AUTOMATIC STARTING VARIABLE PROTECTION
 // ============================================================
 //
-// This detects manual nickname changes.
-//
-// Example:
-//
-// !. Homo
-//      ↓
-// Homo
+// Manual:
 //
 // 🔥Homo
-//      ↓
+// ↓
 // Homo
 //
-// Homo!
-//      ↓
-// Homo!
+// 『Shakin
+// ↓
+// Shakin
 //
-// Ho★mo
-//      ↓
-// Ho★mo
+// But:
+//
+// Bot approves:
+// 🔥Homo
+// ↓
+// 🔥Homo
+//
+// The bot-approved nickname stays because
+// it is marked as an authorized bot change.
 //
 // ============================================================
 
@@ -2777,7 +3219,7 @@ client.on(
         return;
       }
 
-      // Only react to nickname changes
+      // Only nickname changes
       if (
         oldMember.nickname ===
         newMember.nickname
@@ -2785,47 +3227,42 @@ client.on(
         return;
       }
 
-      const config =
-        getGuildConfig(
-          newMember.guild.id
+      // ========================================================
+      // CHECK AUTHORIZED BOT CHANGE
+      // ========================================================
+
+      if (
+        consumeBotNicknameChange(
+          newMember.guild.id,
+          newMember.id,
+          newMember.nickname
+        )
+      ) {
+        console.log(
+          `✅ Authorized bot nickname change accepted: ${newMember.user.tag} -> ${newMember.nickname}`
         );
 
-      // Protection OFF
-      if (
-        !config.variableProtection
-      ) {
         return;
       }
 
-      // No nickname
+      // ========================================================
+      // NO NICKNAME
+      // ========================================================
+
       if (
         !newMember.nickname
       ) {
         return;
       }
 
-      // Allowed role
-      if (
-        canUseStartingVariable(
-          newMember,
-          config
-        )
-      ) {
-        return;
-      }
+      // ========================================================
+      // REMOVE MANUAL STARTING VARIABLES
+      // ========================================================
 
-      // Remove ONLY starting variables
       const cleanNickname =
         removeStartingVariables(
           newMember.nickname
         );
-
-      // Cannot set empty nickname
-      if (
-        !cleanNickname
-      ) {
-        return;
-      }
 
       // Nothing changed
       if (
@@ -2835,10 +3272,29 @@ client.on(
         return;
       }
 
+      // Cannot set empty nickname
+      if (
+        !cleanNickname
+      ) {
+        return;
+      }
+
       const botMember =
         newMember.guild.members.me;
 
       if (!botMember) {
+        return;
+      }
+
+      if (
+        !botMember.permissions.has(
+          PermissionsBitField.Flags.ManageNicknames
+        )
+      ) {
+        console.log(
+          `⚠️ Missing Manage Nicknames permission in ${newMember.guild.name}`
+        );
+
         return;
       }
 
@@ -2866,6 +3322,13 @@ client.on(
       const oldNickname =
         newMember.nickname;
 
+      // Mark bot change
+      markBotNicknameChange(
+        newMember.guild.id,
+        newMember.id,
+        cleanNickname
+      );
+
       await newMember.setNickname(
         cleanNickname,
         "Removed unauthorized starting variables"
@@ -2874,6 +3337,11 @@ client.on(
       console.log(
         `🧹 ${newMember.guild.name} | ${newMember.user.tag} | ${oldNickname} -> ${cleanNickname}`
       );
+
+      const config =
+        getGuildConfig(
+          newMember.guild.id
+        );
 
       await sendAutoRemoveLog(
         newMember.guild,
@@ -2912,12 +3380,10 @@ client.on(
         `➕ Joined server: ${guild.name} (${guild.id})`
       );
 
-      // Register commands immediately
       await registerGuildCommands(
         guild
       );
 
-      // Scan existing members
       await scanGuildMembers(
         guild
       );
