@@ -1,6 +1,7 @@
 // ============================================================
 // PUBLIC MULTI-SERVER DISCORD NICKNAME MANAGEMENT BOT
 // discord.js v14
+// Railway Ready
 // ============================================================
 
 require("dotenv").config();
@@ -20,6 +21,7 @@ const {
   ActivityType,
   REST,
   Routes,
+  SlashCommandBuilder,
   ChannelType
 } = require("discord.js");
 
@@ -43,7 +45,9 @@ const client = new Client({
 const TOKEN = process.env.DISCORD_TOKEN;
 
 if (!TOKEN) {
-  console.error("❌ DISCORD_TOKEN is missing in .env");
+  console.error(
+    "❌ DISCORD_TOKEN is missing. Add DISCORD_TOKEN in Railway Variables."
+  );
   process.exit(1);
 }
 
@@ -54,14 +58,23 @@ if (!TOKEN) {
 const DATA_DIR = path.join(__dirname, "data");
 
 if (!fs.existsSync(DATA_DIR)) {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
+  fs.mkdirSync(DATA_DIR, {
+    recursive: true
+  });
 }
 
-const CONFIG_FILE = path.join(DATA_DIR, "guildConfigs.json");
-const HISTORY_FILE = path.join(DATA_DIR, "nickHistory.json");
+const CONFIG_FILE = path.join(
+  DATA_DIR,
+  "guildConfigs.json"
+);
+
+const HISTORY_FILE = path.join(
+  DATA_DIR,
+  "nickHistory.json"
+);
 
 // ============================================================
-// SAFE JSON LOAD
+// JSON HELPERS
 // ============================================================
 
 function loadJSON(file, fallback) {
@@ -75,12 +88,46 @@ function loadJSON(file, fallback) {
       return fallback;
     }
 
-    return JSON.parse(
-      fs.readFileSync(file, "utf8")
+    const data = fs.readFileSync(
+      file,
+      "utf8"
     );
+
+    if (!data.trim()) {
+      return fallback;
+    }
+
+    return JSON.parse(data);
+
   } catch (error) {
-    console.error(`❌ Failed to load ${file}:`, error);
+
+    console.error(
+      `❌ Failed to load ${file}:`,
+      error
+    );
+
     return fallback;
+  }
+}
+
+function saveJSON(file, data) {
+  try {
+
+    fs.writeFileSync(
+      file,
+      JSON.stringify(data, null, 2)
+    );
+
+    return true;
+
+  } catch (error) {
+
+    console.error(
+      `❌ Failed to save ${file}:`,
+      error
+    );
+
+    return false;
   }
 }
 
@@ -88,63 +135,60 @@ function loadJSON(file, fallback) {
 // DATA
 // ============================================================
 
-let guildConfigs = loadJSON(CONFIG_FILE, {});
-let nickHistory = loadJSON(HISTORY_FILE, {});
+let guildConfigs = loadJSON(
+  CONFIG_FILE,
+  {}
+);
+
+let nickHistory = loadJSON(
+  HISTORY_FILE,
+  {}
+);
 
 // ============================================================
-// SAVE DATA
+// SAVE FUNCTIONS
 // ============================================================
 
 function saveConfigs() {
-  try {
-    fs.writeFileSync(
-      CONFIG_FILE,
-      JSON.stringify(guildConfigs, null, 2)
-    );
-  } catch (error) {
-    console.error(
-      "❌ Failed to save guild configs:",
-      error
-    );
-  }
+  saveJSON(
+    CONFIG_FILE,
+    guildConfigs
+  );
 }
 
 function saveHistory() {
-  try {
-    fs.writeFileSync(
-      HISTORY_FILE,
-      JSON.stringify(nickHistory, null, 2)
-    );
-  } catch (error) {
-    console.error(
-      "❌ Failed to save nickname history:",
-      error
-    );
-  }
+  saveJSON(
+    HISTORY_FILE,
+    nickHistory
+  );
 }
 
 // ============================================================
 // SERVER CONFIG
 // ============================================================
 
+function createDefaultConfig() {
+  return {
+    requestChannelId: null,
+    logChannelId: null,
+
+    // Roles allowed to approve/reject
+    approverRoleIds: [],
+
+    // Roles allowed to use starting variables
+    variableAllowedRoleIds: [],
+
+    // Protect starting variables
+    variableProtection: true
+  };
+}
+
 function getGuildConfig(guildId) {
+
   if (!guildConfigs[guildId]) {
-    guildConfigs[guildId] = {
-      requestChannelId: null,
-      logChannelId: null,
 
-      // Roles that can approve/reject
-      approverRoleIds: [],
-
-      // Roles allowed to use variables at START
-      variableAllowedRoleIds: [],
-
-      // Protection ON/OFF
-      variableProtection: true,
-
-      // Whether initial scan has already happened
-      initialScanCompleted: false
-    };
+    guildConfigs[guildId] =
+      createDefaultConfig();
 
     saveConfigs();
   }
@@ -157,18 +201,35 @@ function getGuildConfig(guildId) {
 // ============================================================
 
 function isAdmin(member) {
+
+  if (!member) {
+    return false;
+  }
+
   return member.permissions.has(
     PermissionsBitField.Flags.Administrator
   );
 }
 
-function hasAnyRole(member, roleIds = []) {
+function hasAnyRole(
+  member,
+  roleIds = []
+) {
+
+  if (!member) {
+    return false;
+  }
+
   return roleIds.some(roleId =>
     member.roles.cache.has(roleId)
   );
 }
 
-function canApprove(member, config) {
+function canApprove(
+  member,
+  config
+) {
+
   return (
     isAdmin(member) ||
     hasAnyRole(
@@ -178,7 +239,11 @@ function canApprove(member, config) {
   );
 }
 
-function canUseStartingVariable(member, config) {
+function canUseStartingVariable(
+  member,
+  config
+) {
+
   return (
     isAdmin(member) ||
     hasAnyRole(
@@ -189,11 +254,11 @@ function canUseStartingVariable(member, config) {
 }
 
 // ============================================================
-// REMOVE STARTING VARIABLES
+// NICKNAME VARIABLE PROTECTION
 // ============================================================
 //
 // Removes ONLY special characters / symbols / emoji
-// from the beginning of nickname.
+// from the START of a nickname.
 //
 // Examples:
 //
@@ -203,8 +268,6 @@ function canUseStartingVariable(member, config) {
 // !Shakin       -> Shakin
 // `Shakin       -> Shakin
 // ~Shakin       -> Shakin
-// "Shakin       -> Shakin
-// 'Shakin       -> Shakin
 //
 // But:
 //
@@ -213,10 +276,16 @@ function canUseStartingVariable(member, config) {
 //
 // ============================================================
 
-function removeStartingVariables(nickname) {
-  if (!nickname) return nickname;
+function removeStartingVariables(
+  nickname
+) {
 
-  let result = nickname.trim();
+  if (!nickname) {
+    return nickname;
+  }
+
+  let result =
+    nickname.trim();
 
   result = result.replace(
     /^[^\p{L}\p{N}\s]+/gu,
@@ -235,7 +304,9 @@ function normalizeNickname(
   nickname,
   config
 ) {
-  let result = nickname.trim();
+
+  let result =
+    nickname.trim();
 
   if (
     config.variableProtection &&
@@ -244,8 +315,11 @@ function normalizeNickname(
       config
     )
   ) {
+
     result =
-      removeStartingVariables(result);
+      removeStartingVariables(
+        result
+      );
   }
 
   return result.trim();
@@ -255,12 +329,19 @@ function normalizeNickname(
 // VALIDATE NICKNAME
 // ============================================================
 
-function validateNickname(nickname) {
+function validateNickname(
+  nickname
+) {
+
   if (!nickname) {
-    return "❌ Nickname cannot be empty.";
+
+    return (
+      "❌ Nickname cannot be empty."
+    );
   }
 
   if (nickname.length > 32) {
+
     return (
       "❌ Nickname cannot be longer than **32 characters**."
     );
@@ -270,23 +351,46 @@ function validateNickname(nickname) {
 }
 
 // ============================================================
-// REQUEST STORAGE
+// HISTORY KEY
 // ============================================================
 
-const pendingRequests = new Map();
+function historyKey(
+  guildId,
+  userId
+) {
+
+  return `${guildId}:${userId}`;
+}
+
+// ============================================================
+// PENDING REQUESTS
+// ============================================================
+
+const pendingRequests =
+  new Map();
 
 // ============================================================
 // REQUEST ID
 // ============================================================
 
 function createRequestId() {
-  return (
-    "REQ-" +
-    Math.random()
-      .toString(36)
-      .substring(2, 8)
-      .toUpperCase()
+
+  let id;
+
+  do {
+
+    id =
+      "REQ-" +
+      Math.random()
+        .toString(36)
+        .substring(2, 8)
+        .toUpperCase();
+
+  } while (
+    pendingRequests.has(id)
   );
+
+  return id;
 }
 
 // ============================================================
@@ -294,6 +398,7 @@ function createRequestId() {
 // ============================================================
 
 function footer() {
+
   return {
     text:
       "Nickname Management System"
@@ -301,1941 +406,7 @@ function footer() {
 }
 
 // ============================================================
-// SLASH COMMANDS
-// ============================================================
-
-const commands = [
-
-  new SlashCommandBuilder()
-    .setName("nicksetup")
-    .setDescription(
-      "Configure the nickname system for this server."
-    )
-    .setDefaultMemberPermissions(
-      PermissionsBitField.Flags.Administrator.toString()
-    )
-
-    // Request channel
-    .addSubcommand(sub =>
-      sub
-        .setName("request-channel")
-        .setDescription(
-          "Set the nickname request channel."
-        )
-        .addChannelOption(option =>
-          option
-            .setName("channel")
-            .setDescription(
-              "Nickname request channel"
-            )
-            .addChannelTypes(
-              ChannelType.GuildText
-            )
-            .setRequired(true)
-        )
-    )
-
-    // Log channel
-    .addSubcommand(sub =>
-      sub
-        .setName("log-channel")
-        .setDescription(
-          "Set the moderator/log channel."
-        )
-        .addChannelOption(option =>
-          option
-            .setName("channel")
-            .setDescription(
-              "Log channel"
-            )
-            .addChannelTypes(
-              ChannelType.GuildText
-            )
-            .setRequired(true)
-        )
-    )
-
-    // Approver role add
-    .addSubcommand(sub =>
-      sub
-        .setName("approver-add")
-        .setDescription(
-          "Allow a role to approve/reject requests."
-        )
-        .addRoleOption(option =>
-          option
-            .setName("role")
-            .setDescription(
-              "Approver role"
-            )
-            .setRequired(true)
-        )
-    )
-
-    // Approver role remove
-    .addSubcommand(sub =>
-      sub
-        .setName("approver-remove")
-        .setDescription(
-          "Remove a role from nickname approvers."
-        )
-        .addRoleOption(option =>
-          option
-            .setName("role")
-            .setDescription("Role")
-            .setRequired(true)
-        )
-    )
-
-    // Variable role add
-    .addSubcommand(sub =>
-      sub
-        .setName("variable-role-add")
-        .setDescription(
-          "Allow a role to use variables at the start."
-        )
-        .addRoleOption(option =>
-          option
-            .setName("role")
-            .setDescription(
-              "Allowed role"
-            )
-            .setRequired(true)
-        )
-    )
-
-    // Variable role remove
-    .addSubcommand(sub =>
-      sub
-        .setName("variable-role-remove")
-        .setDescription(
-          "Remove a role from variable allowed roles."
-        )
-        .addRoleOption(option =>
-          option
-            .setName("role")
-            .setDescription("Role")
-            .setRequired(true)
-        )
-    )
-
-    // Variable protection
-    .addSubcommand(sub =>
-      sub
-        .setName("variable-protection")
-        .setDescription(
-          "Enable or disable variable protection."
-        )
-        .addBooleanOption(option =>
-          option
-            .setName("enabled")
-            .setDescription(
-              "Enable variable protection?"
-            )
-            .setRequired(true)
-        )
-    )
-
-    // Show config
-    .addSubcommand(sub =>
-      sub
-        .setName("show")
-        .setDescription(
-          "Show current nickname configuration."
-        )
-    ),
-
-  // Nickname panel
-  new SlashCommandBuilder()
-    .setName("nickpanel")
-    .setDescription(
-      "Send the nickname request panel."
-    )
-    .setDefaultMemberPermissions(
-      PermissionsBitField.Flags.Administrator.toString()
-    )
-    .addChannelOption(option =>
-      option
-        .setName("channel")
-        .setDescription(
-          "Channel where the panel should be sent."
-        )
-        .addChannelTypes(
-          ChannelType.GuildText
-        )
-        .setRequired(false)
-    )
-
-].map(command => command.toJSON());
-
-// ============================================================
-// REGISTER COMMANDS
-// ============================================================
-
-async function registerCommands() {
-  try {
-
-    const rest =
-      new REST({ version: "10" })
-        .setToken(TOKEN);
-
-    await rest.put(
-      Routes.applicationCommands(
-        client.user.id
-      ),
-      {
-        body: commands
-      }
-    );
-
-    console.log(
-      "✅ Global slash commands registered."
-    );
-
-  } catch (error) {
-
-    console.error(
-      "❌ Failed to register slash commands:",
-      error
-    );
-  }
-}
-
-// ============================================================
-// AUTOMATIC INITIAL MEMBER SCAN
-// ============================================================
-//
-// Called when bot joins a new server.
-//
-// It scans existing members and removes unauthorized
-// variables from the START of their nickname.
-//
-// ============================================================
-
-async function scanExistingMembers(guild) {
-
-  console.log(
-    `🔍 Starting nickname scan for: ${guild.name}`
-  );
-
-  const config =
-    getGuildConfig(guild.id);
-
-  if (!config.variableProtection) {
-
-    console.log(
-      `ℹ️ Variable protection disabled in ${guild.name}`
-    );
-
-    return;
-  }
-
-  try {
-
-    // Fetch all members
-    const members =
-      await guild.members.fetch();
-
-    console.log(
-      `👥 Found ${members.size} members in ${guild.name}`
-    );
-
-    let checked = 0;
-    let changed = 0;
-    let skipped = 0;
-
-    const botMember =
-      guild.members.me;
-
-    for (const [, member] of members) {
-
-      checked++;
-
-      // ------------------------------------------------------
-      // Skip bots
-      // ------------------------------------------------------
-
-      if (member.user.bot) {
-        skipped++;
-        continue;
-      }
-
-      // ------------------------------------------------------
-      // Skip members without nickname
-      // ------------------------------------------------------
-
-      if (!member.nickname) {
-        skipped++;
-        continue;
-      }
-
-      // ------------------------------------------------------
-      // Skip admins / variable allowed roles
-      // ------------------------------------------------------
-
-      if (
-        canUseStartingVariable(
-          member,
-          config
-        )
-      ) {
-        skipped++;
-        continue;
-      }
-
-      // ------------------------------------------------------
-      // Skip members bot cannot edit
-      // ------------------------------------------------------
-
-      if (!botMember) {
-        skipped++;
-        continue;
-      }
-
-      if (
-        member.id === guild.ownerId
-      ) {
-        skipped++;
-        continue;
-      }
-
-      if (
-        member.roles.highest.position >=
-        botMember.roles.highest.position
-      ) {
-        skipped++;
-        continue;
-      }
-
-      // ------------------------------------------------------
-      // Clean nickname
-      // ------------------------------------------------------
-
-      const cleanNickname =
-        removeStartingVariables(
-          member.nickname
-        );
-
-      // Nothing to change
-      if (
-        !cleanNickname ||
-        cleanNickname === member.nickname
-      ) {
-        skipped++;
-        continue;
-      }
-
-      // Discord max nickname length
-      if (
-        cleanNickname.length > 32
-      ) {
-        skipped++;
-        continue;
-      }
-
-      // ------------------------------------------------------
-      // Save history
-      // ------------------------------------------------------
-
-      nickHistory[member.id] = {
-        guildId: guild.id,
-        nickname: member.nickname,
-        savedAt: Date.now()
-      };
-
-      // ------------------------------------------------------
-      // Change nickname
-      // ------------------------------------------------------
-
-      try {
-
-        await member.setNickname(
-          cleanNickname,
-          "Initial nickname protection scan"
-        );
-
-        changed++;
-
-        console.log(
-          `🧹 ${member.user.tag}: "${member.nickname}" → "${cleanNickname}"`
-        );
-
-        // Send log
-        await sendAutoRemoveLog(
-          guild,
-          config,
-          member,
-          cleanNickname
-        );
-
-      } catch (error) {
-
-        console.error(
-          `❌ Could not change ${member.user.tag}:`,
-          error.message
-        );
-      }
-
-      // ------------------------------------------------------
-      // Small delay to avoid aggressive API requests
-      // ------------------------------------------------------
-
-      await sleep(1000);
-    }
-
-    saveHistory();
-
-    config.initialScanCompleted = true;
-    saveConfigs();
-
-    console.log(
-      `✅ Initial scan finished for ${guild.name}`
-    );
-
-    console.log(
-      `📊 Checked: ${checked} | Changed: ${changed} | Skipped: ${skipped}`
-    );
-
-  } catch (error) {
-
-    console.error(
-      `❌ Initial member scan failed for ${guild.name}:`,
-      error
-    );
-  }
-}
-
-// ============================================================
-// SLEEP
-// ============================================================
-
-function sleep(ms) {
-  return new Promise(
-    resolve => setTimeout(resolve, ms)
-  );
-}
-
-// ============================================================
-// READY
-// ============================================================
-
-client.once("ready", async () => {
-
-  console.log(
-    "================================="
-  );
-
-  console.log(
-    `✅ Logged in as ${client.user.tag}`
-  );
-
-  console.log(
-    `🌐 Servers: ${client.guilds.cache.size}`
-  );
-
-  console.log(
-    "================================="
-  );
-
-  client.user.setPresence({
-
-    activities: [
-      {
-        name:
-          "Nickname Management",
-        type:
-          ActivityType.Watching
-      }
-    ],
-
-    status: "online"
-  });
-
-  await registerCommands();
-
-  // ----------------------------------------------------------
-  // Scan existing servers on startup
-  // ----------------------------------------------------------
-  //
-  // This also protects against:
-  // Bot restart
-  // Railway restart
-  // Hosting restart
-  //
-  // Only servers that have not completed the initial scan
-  // are scanned.
-  // ----------------------------------------------------------
-
-  for (
-    const [, guild]
-    of client.guilds.cache
-  ) {
-
-    const config =
-      getGuildConfig(guild.id);
-
-    if (
-      !config.initialScanCompleted
-    ) {
-
-      await scanExistingMembers(
-        guild
-      );
-    }
-  }
-});
-
-// ============================================================
-// SLASH COMMAND HANDLER
-// ============================================================
-
-client.on(
-  "interactionCreate",
-  async interaction => {
-
-    // ========================================================
-    // SLASH COMMANDS
-    // ========================================================
-
-    if (
-      interaction.isChatInputCommand()
-    ) {
-
-      if (!interaction.guild) {
-
-        return interaction.reply({
-          content:
-            "❌ This command can only be used inside a server.",
-          ephemeral: true
-        });
-      }
-
-      const guild =
-        interaction.guild;
-
-      const member =
-        interaction.member;
-
-      if (!isAdmin(member)) {
-
-        return interaction.reply({
-          content:
-            "❌ Only server administrators can configure this bot.",
-          ephemeral: true
-        });
-      }
-
-      const config =
-        getGuildConfig(guild.id);
-
-      // ------------------------------------------------------
-      // NICKSETUP
-      // ------------------------------------------------------
-
-      if (
-        interaction.commandName ===
-        "nicksetup"
-      ) {
-
-        const sub =
-          interaction.options.getSubcommand();
-
-        // ----------------------------------------------------
-        // REQUEST CHANNEL
-        // ----------------------------------------------------
-
-        if (
-          sub ===
-          "request-channel"
-        ) {
-
-          const channel =
-            interaction.options.getChannel(
-              "channel"
-            );
-
-          config.requestChannelId =
-            channel.id;
-
-          saveConfigs();
-
-          return interaction.reply({
-            content:
-              `✅ Nickname request channel set to ${channel}.`,
-            ephemeral: true
-          });
-        }
-
-        // ----------------------------------------------------
-        // LOG CHANNEL
-        // ----------------------------------------------------
-
-        if (
-          sub ===
-          "log-channel"
-        ) {
-
-          const channel =
-            interaction.options.getChannel(
-              "channel"
-            );
-
-          config.logChannelId =
-            channel.id;
-
-          saveConfigs();
-
-          return interaction.reply({
-            content:
-              `✅ Nickname log channel set to ${channel}.`,
-            ephemeral: true
-          });
-        }
-
-        // ----------------------------------------------------
-        // APPROVER ADD
-        // ----------------------------------------------------
-
-        if (
-          sub ===
-          "approver-add"
-        ) {
-
-          const role =
-            interaction.options.getRole(
-              "role"
-            );
-
-          if (
-            !config.approverRoleIds.includes(
-              role.id
-            )
-          ) {
-
-            config.approverRoleIds.push(
-              role.id
-            );
-          }
-
-          saveConfigs();
-
-          return interaction.reply({
-            content:
-              `✅ ${role} can now approve/reject nickname requests.`,
-            ephemeral: true
-          });
-        }
-
-        // ----------------------------------------------------
-        // APPROVER REMOVE
-        // ----------------------------------------------------
-
-        if (
-          sub ===
-          "approver-remove"
-        ) {
-
-          const role =
-            interaction.options.getRole(
-              "role"
-            );
-
-          config.approverRoleIds =
-            config.approverRoleIds.filter(
-              id =>
-                id !== role.id
-            );
-
-          saveConfigs();
-
-          return interaction.reply({
-            content:
-              `✅ ${role} can no longer approve/reject nickname requests.`,
-            ephemeral: true
-          });
-        }
-
-        // ----------------------------------------------------
-        // VARIABLE ROLE ADD
-        // ----------------------------------------------------
-
-        if (
-          sub ===
-          "variable-role-add"
-        ) {
-
-          const role =
-            interaction.options.getRole(
-              "role"
-            );
-
-          if (
-            !config.variableAllowedRoleIds.includes(
-              role.id
-            )
-          ) {
-
-            config.variableAllowedRoleIds.push(
-              role.id
-            );
-          }
-
-          saveConfigs();
-
-          return interaction.reply({
-            content:
-              `✅ ${role} can now use variables/symbols at the START of their nickname.`,
-            ephemeral: true
-          });
-        }
-
-        // ----------------------------------------------------
-        // VARIABLE ROLE REMOVE
-        // ----------------------------------------------------
-
-        if (
-          sub ===
-          "variable-role-remove"
-        ) {
-
-          const role =
-            interaction.options.getRole(
-              "role"
-            );
-
-          config.variableAllowedRoleIds =
-            config.variableAllowedRoleIds.filter(
-              id =>
-                id !== role.id
-            );
-
-          saveConfigs();
-
-          return interaction.reply({
-            content:
-              `✅ ${role} is no longer allowed to use starting variables.`,
-            ephemeral: true
-          });
-        }
-
-        // ----------------------------------------------------
-        // VARIABLE PROTECTION
-        // ----------------------------------------------------
-
-        if (
-          sub ===
-          "variable-protection"
-        ) {
-
-          const enabled =
-            interaction.options.getBoolean(
-              "enabled"
-            );
-
-          config.variableProtection =
-            enabled;
-
-          saveConfigs();
-
-          return interaction.reply({
-            content:
-              enabled
-                ? "✅ Variable protection is now **ON**."
-                : "⚠️ Variable protection is now **OFF**.",
-            ephemeral: true
-          });
-        }
-
-        // ----------------------------------------------------
-        // SHOW CONFIG
-        // ----------------------------------------------------
-
-        if (
-          sub === "show"
-        ) {
-
-          const approvers =
-            config.approverRoleIds.length
-              ? config.approverRoleIds
-                  .map(
-                    id =>
-                      `<@&${id}>`
-                  )
-                  .join(", ")
-              : "Not configured";
-
-          const variableRoles =
-            config.variableAllowedRoleIds.length
-              ? config.variableAllowedRoleIds
-                  .map(
-                    id =>
-                      `<@&${id}>`
-                  )
-                  .join(", ")
-              : "No roles configured";
-
-          const embed =
-            new EmbedBuilder()
-              .setColor(0x2bafff)
-              .setTitle(
-                "⚙️ Nickname System Configuration"
-              )
-              .addFields(
-
-                {
-                  name:
-                    "📝 Request Channel",
-                  value:
-                    config.requestChannelId
-                      ? `<#${config.requestChannelId}>`
-                      : "Not configured",
-                  inline: false
-                },
-
-                {
-                  name:
-                    "📋 Log Channel",
-                  value:
-                    config.logChannelId
-                      ? `<#${config.logChannelId}>`
-                      : "Not configured",
-                  inline: false
-                },
-
-                {
-                  name:
-                    "👮 Approver Roles",
-                  value:
-                    approvers,
-                  inline: false
-                },
-
-                {
-                  name:
-                    "✨ Variable Allowed Roles",
-                  value:
-                    variableRoles,
-                  inline: false
-                },
-
-                {
-                  name:
-                    "🛡️ Variable Protection",
-                  value:
-                    config.variableProtection
-                      ? "🟢 Enabled"
-                      : "🔴 Disabled",
-                  inline: false
-                },
-
-                {
-                  name:
-                    "🔍 Initial Scan",
-                  value:
-                    config.initialScanCompleted
-                      ? "✅ Completed"
-                      : "🟡 Pending",
-                  inline: false
-                }
-
-              )
-              .setFooter(footer())
-              .setTimestamp();
-
-          return interaction.reply({
-            embeds: [embed],
-            ephemeral: true
-          });
-        }
-      }
-
-      // ======================================================
-      // NICKPANEL
-      // ======================================================
-
-      if (
-        interaction.commandName ===
-        "nickpanel"
-      ) {
-
-        const selectedChannel =
-          interaction.options.getChannel(
-            "channel"
-          );
-
-        const channel =
-          selectedChannel ||
-          (
-            config.requestChannelId
-              ? guild.channels.cache.get(
-                  config.requestChannelId
-                )
-              : null
-          );
-
-        if (!channel) {
-
-          return interaction.reply({
-            content:
-              "❌ Request channel is not configured.\nUse `/nicksetup request-channel` first.",
-            ephemeral: true
-          });
-        }
-
-        const embed =
-          new EmbedBuilder()
-            .setColor(0x2bafff)
-            .setTitle(
-              "📝 Nickname Change"
-            )
-            .setDescription(
-              [
-                "Send your requested nickname in this channel.",
-                "",
-                "You **do not need any command or prefix**.",
-                "",
-                "Example:",
-                "`Shakin Ahmed`",
-                "",
-                "Your request will be sent to the configured moderators for approval.",
-                "",
-                "⚠️ Members without the configured Variable Allowed Role cannot use special characters / emojis at the **beginning** of their nickname."
-              ].join("\n")
-            )
-            .setFooter(footer())
-            .setTimestamp();
-
-        await channel.send({
-          embeds: [embed]
-        });
-
-        return interaction.reply({
-          content:
-            `✅ Nickname panel sent to ${channel}.`,
-          ephemeral: true
-        });
-      }
-    }
-
-    // ========================================================
-    // BUTTONS
-    // ========================================================
-
-    if (
-      interaction.isButton()
-    ) {
-
-      const customId =
-        interaction.customId;
-
-      if (
-        !customId.startsWith(
-          "nick_accept_"
-        ) &&
-        !customId.startsWith(
-          "nick_reject_"
-        )
-      ) {
-        return;
-      }
-
-      const requestId =
-        customId
-          .replace(
-            "nick_accept_",
-            ""
-          )
-          .replace(
-            "nick_reject_",
-            ""
-          );
-
-      const request =
-        pendingRequests.get(
-          requestId
-        );
-
-      if (!request) {
-
-        return interaction.reply({
-          content:
-            "⚠️ This nickname request is no longer active.",
-          ephemeral: true
-        });
-      }
-
-      const guild =
-        interaction.guild;
-
-      if (!guild) {
-
-        return interaction.reply({
-          content:
-            "❌ This request is no longer associated with a server.",
-          ephemeral: true
-        });
-      }
-
-      const config =
-        getGuildConfig(
-          guild.id
-        );
-
-      const moderator =
-        await guild.members
-          .fetch(
-            interaction.user.id
-          )
-          .catch(() => null);
-
-      if (!moderator) {
-
-        return interaction.reply({
-          content:
-            "❌ Could not find your server membership.",
-          ephemeral: true
-        });
-      }
-
-      if (
-        !canApprove(
-          moderator,
-          config
-        )
-      ) {
-
-        return interaction.reply({
-          content:
-            "❌ You do not have permission to approve or reject nickname requests.",
-          ephemeral: true
-        });
-      }
-
-      if (
-        request.status !==
-        "pending"
-      ) {
-
-        return interaction.reply({
-          content:
-            "⚠️ This request has already been processed.",
-          ephemeral: true
-        });
-      }
-
-      request.status =
-        "processing";
-
-      await interaction.deferUpdate();
-
-      // ======================================================
-      // APPROVE
-      // ======================================================
-
-      if (
-        customId.startsWith(
-          "nick_accept_"
-        )
-      ) {
-
-        try {
-
-          const botMember =
-            guild.members.me;
-
-          if (!botMember) {
-            throw new Error(
-              "Bot member unavailable"
-            );
-          }
-
-          if (
-            memberRolePosition(
-              await guild.members.fetch(
-                request.userId
-              ),
-              botMember
-            )
-          ) {
-
-            request.status =
-              "failed";
-
-            return interaction.message.edit({
-              content:
-                "❌ Cannot change nickname because the member's highest role is equal to or higher than the bot's highest role.",
-              components: []
-            });
-          }
-
-          const member =
-            await guild.members.fetch(
-              request.userId
-            );
-
-          // Save old nickname
-          nickHistory[member.id] = {
-            guildId:
-              guild.id,
-
-            nickname:
-              member.nickname ||
-              member.user.username,
-
-            savedAt:
-              Date.now()
-          };
-
-          saveHistory();
-
-          await member.setNickname(
-            request.finalNickname,
-            `Nickname request ${requestId} approved by ${interaction.user.tag}`
-          );
-
-          request.status =
-            "approved";
-
-          const embed =
-            new EmbedBuilder()
-              .setColor(0x4dff88)
-              .setTitle(
-                "✅ Nickname Request Approved"
-              )
-              .setThumbnail(
-                member.displayAvatarURL({
-                  extension: "png",
-                  size: 256
-                })
-              )
-              .addFields(
-
-                {
-                  name: "👤 User",
-                  value: `${member}`,
-                  inline: true
-                },
-
-                {
-                  name: "👮 Moderator",
-                  value: `${moderator}`,
-                  inline: true
-                },
-
-                {
-                  name: "🆔 Request ID",
-                  value: requestId,
-                  inline: true
-                },
-
-                {
-                  name:
-                    "🧾 Old Nickname",
-                  value:
-                    request.oldNickname ||
-                    member.user.username,
-                  inline: false
-                },
-
-                {
-                  name:
-                    "🆕 New Nickname",
-                  value:
-                    request.finalNickname,
-                  inline: false
-                },
-
-                {
-                  name:
-                    "📌 Status",
-                  value:
-                    "🟢 Approved",
-                  inline: false
-                }
-
-              )
-              .setFooter(footer())
-              .setTimestamp();
-
-          await interaction.message.edit({
-            content:
-              "✅ Request approved.",
-            embeds: [embed],
-            components: []
-          });
-
-          const requestChannel =
-            guild.channels.cache.get(
-              config.requestChannelId
-            );
-
-          if (requestChannel) {
-
-            const userMessage =
-              await requestChannel.messages
-                .fetch(
-                  request.userMessageId
-                )
-                .catch(
-                  () => null
-                );
-
-            if (userMessage) {
-
-              await userMessage
-                .edit({
-                  embeds: [embed],
-                  components: []
-                })
-                .catch(() => {});
-            }
-          }
-
-          await member.send({
-            embeds: [embed]
-          }).catch(() => {});
-
-          await sendLog(
-            guild,
-            config,
-            embed
-          );
-
-          pendingRequests.delete(
-            requestId
-          );
-
-        } catch (error) {
-
-          console.error(
-            "❌ Approve error:",
-            error
-          );
-
-          request.status =
-            "failed";
-
-          const errorEmbed =
-            new EmbedBuilder()
-              .setColor(0xff4e4e)
-              .setTitle(
-                "❌ Nickname Change Failed"
-              )
-              .setDescription(
-                "The nickname could not be changed. Please check the bot's role hierarchy and permissions."
-              )
-              .setFooter(footer())
-              .setTimestamp();
-
-          await interaction.message.edit({
-            content:
-              "❌ Nickname change failed.",
-            embeds: [errorEmbed],
-            components: []
-          });
-        }
-
-        return;
-      }
-
-      // ======================================================
-      // REJECT
-      // ======================================================
-
-      if (
-        customId.startsWith(
-          "nick_reject_"
-        )
-      ) {
-
-        try {
-
-          const member =
-            await guild.members.fetch(
-              request.userId
-            );
-
-          request.status =
-            "rejected";
-
-          const embed =
-            new EmbedBuilder()
-              .setColor(0xff4e4e)
-              .setTitle(
-                "❌ Nickname Request Rejected"
-              )
-              .setThumbnail(
-                member.displayAvatarURL({
-                  extension: "png",
-                  size: 256
-                })
-              )
-              .addFields(
-
-                {
-                  name: "👤 User",
-                  value: `${member}`,
-                  inline: true
-                },
-
-                {
-                  name:
-                    "👮 Moderator",
-                  value: `${moderator}`,
-                  inline: true
-                },
-
-                {
-                  name:
-                    "🆔 Request ID",
-                  value: requestId,
-                  inline: true
-                },
-
-                {
-                  name:
-                    "🧾 Current Nickname",
-                  value:
-                    request.oldNickname ||
-                    member.user.username,
-                  inline: false
-                },
-
-                {
-                  name:
-                    "🆕 Requested Nickname",
-                  value:
-                    request.requestedNickname,
-                  inline: false
-                },
-
-                {
-                  name:
-                    "📌 Status",
-                  value:
-                    "🔴 Rejected",
-                  inline: false
-                }
-
-              )
-              .setFooter(footer())
-              .setTimestamp();
-
-          await interaction.message.edit({
-            content:
-              "❌ Request rejected.",
-            embeds: [embed],
-            components: []
-          });
-
-          const requestChannel =
-            guild.channels.cache.get(
-              config.requestChannelId
-            );
-
-          if (requestChannel) {
-
-            const userMessage =
-              await requestChannel.messages
-                .fetch(
-                  request.userMessageId
-                )
-                .catch(
-                  () => null
-                );
-
-            if (userMessage) {
-
-              await userMessage
-                .edit({
-                  embeds: [embed],
-                  components: []
-                })
-                .catch(() => {});
-            }
-          }
-
-          await member.send({
-            embeds: [embed]
-          }).catch(() => {});
-
-          await sendLog(
-            guild,
-            config,
-            embed
-          );
-
-          pendingRequests.delete(
-            requestId
-          );
-
-        } catch (error) {
-
-          console.error(
-            "❌ Reject error:",
-            error
-          );
-        }
-
-        return;
-      }
-    }
-  }
-);
-
-// ============================================================
-// ROLE POSITION CHECK
-// ============================================================
-
-function memberRolePosition(
-  member,
-  botMember
-) {
-  return (
-    member.roles.highest.position >=
-    botMember.roles.highest.position
-  );
-}
-
-// ============================================================
-// MESSAGE CREATE
-// ============================================================
-//
-// User simply writes nickname.
-// No command needed.
-//
-// ============================================================
-
-client.on(
-  "messageCreate",
-  async message => {
-
-    if (!message.guild) return;
-
-    if (message.author.bot) return;
-
-    const guild =
-      message.guild;
-
-    const config =
-      getGuildConfig(
-        guild.id
-      );
-
-    if (
-      !config.requestChannelId ||
-      message.channel.id !==
-        config.requestChannelId
-    ) {
-      return;
-    }
-
-    const member =
-      await guild.members.fetch(
-        message.author.id
-      ).catch(
-        () => null
-      );
-
-    if (!member) return;
-
-    const requestedNickname =
-      message.content.trim();
-
-    if (!requestedNickname) return;
-
-    // ========================================================
-    // NORMALIZE
-    // ========================================================
-
-    const finalNickname =
-      normalizeNickname(
-        member,
-        requestedNickname,
-        config
-      );
-
-    if (!finalNickname) {
-
-      await message.reply({
-        content:
-          "❌ Your nickname must contain at least one letter or number."
-      }).catch(() => {});
-
-      return;
-    }
-
-    // ========================================================
-    // VALIDATE
-    // ========================================================
-
-    const validationError =
-      validateNickname(
-        finalNickname
-      );
-
-    if (validationError) {
-
-      await message.reply({
-        content:
-          validationError
-      }).catch(() => {});
-
-      return;
-    }
-
-    // ========================================================
-    // BOT ROLE CHECK
-    // ========================================================
-
-    const botMember =
-      guild.members.me;
-
-    if (!botMember) return;
-
-    if (
-      memberRolePosition(
-        member,
-        botMember
-      )
-    ) {
-
-      await message.reply({
-        content:
-          "❌ I cannot change your nickname because your highest role is equal to or higher than my highest role."
-      }).catch(() => {});
-
-      return;
-    }
-
-    // ========================================================
-    // REQUEST
-    // ========================================================
-
-    const requestId =
-      createRequestId();
-
-    const oldNickname =
-      member.nickname ||
-      member.user.username;
-
-    const variableRemoved =
-      requestedNickname !==
-      finalNickname;
-
-    const submittedAt =
-      Math.floor(
-        Date.now() / 1000
-      );
-
-    const requestEmbed =
-      new EmbedBuilder()
-        .setColor(0x2bafff)
-        .setTitle(
-          "📝 Nickname Change Request"
-        )
-        .setThumbnail(
-          member.displayAvatarURL({
-            extension: "png",
-            size: 256
-          })
-        )
-        .addFields(
-
-          {
-            name: "👤 User",
-            value: `${member}`,
-            inline: true
-          },
-
-          {
-            name: "🆔 Request ID",
-            value: requestId,
-            inline: true
-          },
-
-          {
-            name:
-              "🧾 Current Nickname",
-            value: oldNickname,
-            inline: false
-          },
-
-          {
-            name:
-              "🆕 Requested Nickname",
-            value:
-              requestedNickname,
-            inline: false
-          },
-
-          {
-            name:
-              "✅ Final Nickname",
-            value:
-              finalNickname,
-            inline: false
-          },
-
-          {
-            name:
-              "✨ Starting Variable",
-            value:
-              variableRemoved
-                ? "⚠️ Removed automatically"
-                : "None",
-            inline: true
-          },
-
-          {
-            name:
-              "📌 Status",
-            value:
-              "🟡 Pending Review",
-            inline: true
-          },
-
-          {
-            name:
-              "⏱️ Submitted",
-            value:
-              `<t:${submittedAt}:F>`,
-            inline: false
-          }
-
-        )
-        .setFooter({
-          text:
-            "Waiting for an authorized moderator to approve or reject."
-        })
-        .setTimestamp();
-
-    // ========================================================
-    // USER REPLY
-    // ========================================================
-
-    const userReply =
-      await message.reply({
-        embeds: [requestEmbed],
-
-        allowedMentions: {
-          users: []
-        }
-      });
-
-    // ========================================================
-    // BUTTONS
-    // ========================================================
-
-    const buttons =
-      new ActionRowBuilder()
-        .addComponents(
-
-          new ButtonBuilder()
-            .setCustomId(
-              `nick_accept_${requestId}`
-            )
-            .setLabel("Approve")
-            .setEmoji("✅")
-            .setStyle(
-              ButtonStyle.Success
-            ),
-
-          new ButtonBuilder()
-            .setCustomId(
-              `nick_reject_${requestId}`
-            )
-            .setLabel("Reject")
-            .setEmoji("❌")
-            .setStyle(
-              ButtonStyle.Danger
-            )
-
-        );
-
-    // ========================================================
-    // LOG CHANNEL
-    // ========================================================
-
-    const logChannel =
-      config.logChannelId
-        ? guild.channels.cache.get(
-            config.logChannelId
-          )
-        : null;
-
-    if (!logChannel) {
-
-      await userReply.edit({
-        embeds: [
-          new EmbedBuilder()
-            .setColor(0xffb84d)
-            .setTitle(
-              "⚠️ Nickname System Not Configured"
-            )
-            .setDescription(
-              "The nickname log channel has not been configured by the server administrator."
-            )
-            .setFooter(footer())
-            .setTimestamp()
-        ]
-      }).catch(() => {});
-
-      return;
-    }
-
-    // ========================================================
-    // APPROVER MENTIONS
-    // ========================================================
-
-    const roleMentions =
-      config.approverRoleIds.length
-        ? config.approverRoleIds
-            .map(
-              id =>
-                `<@&${id}>`
-            )
-            .join(" ")
-        : "";
-
-    // ========================================================
-    // SEND MODERATOR REQUEST
-    // ========================================================
-
-    const moderatorMessage =
-      await logChannel.send({
-
-        content:
-          roleMentions
-            ? `${roleMentions}\n🔔 **New nickname change request.**`
-            : "🔔 **New nickname change request.**",
-
-        embeds: [
-          requestEmbed
-        ],
-
-        components: [
-          buttons
-        ],
-
-        allowedMentions: {
-          roles:
-            config.approverRoleIds
-        }
-
-      });
-
-    // ========================================================
-    // SAVE REQUEST
-    // ========================================================
-
-    pendingRequests.set(
-      requestId,
-      {
-
-        guildId:
-          guild.id,
-
-        userId:
-          member.id,
-
-        oldNickname,
-
-        requestedNickname,
-
-        finalNickname,
-
-        userMessageId:
-          userReply.id,
-
-        moderatorMessageId:
-          moderatorMessage.id,
-
-        status:
-          "pending",
-
-        createdAt:
-          Date.now()
-      }
-    );
-
-    // ========================================================
-    // EXPIRE AFTER 3 HOURS
-    // ========================================================
-
-    setTimeout(
-      async () => {
-
-        const request =
-          pendingRequests.get(
-            requestId
-          );
-
-        if (!request) return;
-
-        if (
-          request.status !==
-          "pending"
-        ) {
-          return;
-        }
-
-        request.status =
-          "expired";
-
-        pendingRequests.delete(
-          requestId
-        );
-
-        const expiredEmbed =
-          new EmbedBuilder()
-            .setColor(0x808080)
-            .setTitle(
-              "⌛ Nickname Request Expired"
-            )
-            .setDescription(
-              "This nickname request was not processed within the allowed time."
-            )
-            .addFields({
-              name:
-                "🆔 Request ID",
-              value:
-                requestId
-            })
-            .setFooter(footer())
-            .setTimestamp();
-
-        await moderatorMessage
-          .edit({
-            content:
-              "⌛ Request expired.",
-            embeds: [
-              expiredEmbed
-            ],
-            components: []
-          })
-          .catch(() => {});
-
-        await userReply
-          .edit({
-            embeds: [
-              expiredEmbed
-            ],
-            components: []
-          })
-          .catch(() => {});
-
-      },
-      3 * 60 * 60 * 1000
-    );
-  }
-);
-
-// ============================================================
-// AUTO PROTECTION
-// ============================================================
-//
-// If someone manually changes nickname after bot is running,
-// unauthorized starting variables are removed automatically.
-//
-// ============================================================
-
-client.on(
-  "guildMemberUpdate",
-  async (
-    oldMember,
-    newMember
-  ) => {
-
-    try {
-
-      const config =
-        getGuildConfig(
-          newMember.guild.id
-        );
-
-      if (
-        !config.variableProtection
-      ) {
-        return;
-      }
-
-      if (!newMember.nickname) {
-        return;
-      }
-
-      if (
-        canUseStartingVariable(
-          newMember,
-          config
-        )
-      ) {
-        return;
-      }
-
-      const cleanNickname =
-        removeStartingVariables(
-          newMember.nickname
-        );
-
-      if (!cleanNickname) {
-        return;
-      }
-
-      if (
-        cleanNickname ===
-        newMember.nickname
-      ) {
-        return;
-      }
-
-      const botMember =
-        newMember.guild.members.me;
-
-      if (!botMember) return;
-
-      if (
-        newMember.id ===
-        newMember.guild.ownerId
-      ) {
-        return;
-      }
-
-      if (
-        newMember.roles.highest.position >=
-        botMember.roles.highest.position
-      ) {
-        return;
-      }
-
-      await newMember.setNickname(
-        cleanNickname,
-        "Removed unauthorized starting variables"
-      );
-
-      console.log(
-        `🧹 Removed starting variable from ${newMember.user.tag} in ${newMember.guild.name}`
-      );
-
-      await sendAutoRemoveLog(
-        newMember.guild,
-        config,
-        newMember,
-        cleanNickname
-      );
-
-    } catch (error) {
-
-      console.error(
-        "❌ Auto nickname protection error:",
-        error
-      );
-    }
-  }
-);
-
-// ============================================================
-// LOG
+// LOG FUNCTION
 // ============================================================
 
 async function sendLog(
@@ -2280,6 +451,7 @@ async function sendAutoRemoveLog(
   guild,
   config,
   member,
+  oldNickname,
   cleanNickname
 ) {
 
@@ -2311,31 +483,29 @@ async function sendAutoRemoveLog(
           })
         )
         .addFields(
-
           {
-            name:
-              "👤 Member",
-            value:
-              `${member}`,
+            name: "👤 Member",
+            value: `${member}`,
             inline: true
           },
-
           {
-            name:
-              "🧾 New Nickname",
+            name: "🧾 Old Nickname",
             value:
-              cleanNickname,
-            inline: true
+              oldNickname ||
+              member.user.username,
+            inline: false
           },
-
           {
-            name:
-              "📌 Action",
+            name: "🆕 New Nickname",
+            value: cleanNickname,
+            inline: false
+          },
+          {
+            name: "📌 Action",
             value:
               "Starting variable automatically removed.",
             inline: false
           }
-
         )
         .setFooter(footer())
         .setTimestamp();
@@ -2354,48 +524,1949 @@ async function sendAutoRemoveLog(
 }
 
 // ============================================================
-// BOT JOINS NEW SERVER
+// SLASH COMMANDS
+// ============================================================
+
+const commands = [
+
+  // ==========================================================
+  // /nicksetup
+  // ==========================================================
+
+  new SlashCommandBuilder()
+    .setName("nicksetup")
+    .setDescription(
+      "Configure nickname system for this server."
+    )
+    .setDefaultMemberPermissions(
+      PermissionsBitField.Flags.Administrator.toString()
+    )
+
+    // Request channel
+    .addSubcommand(sub =>
+      sub
+        .setName("request-channel")
+        .setDescription(
+          "Set nickname request channel."
+        )
+        .addChannelOption(option =>
+          option
+            .setName("channel")
+            .setDescription(
+              "Nickname request channel."
+            )
+            .addChannelTypes(
+              ChannelType.GuildText
+            )
+            .setRequired(true)
+        )
+    )
+
+    // Log channel
+    .addSubcommand(sub =>
+      sub
+        .setName("log-channel")
+        .setDescription(
+          "Set nickname moderator/log channel."
+        )
+        .addChannelOption(option =>
+          option
+            .setName("channel")
+            .setDescription(
+              "Nickname log channel."
+            )
+            .addChannelTypes(
+              ChannelType.GuildText
+            )
+            .setRequired(true)
+        )
+    )
+
+    // Approver add
+    .addSubcommand(sub =>
+      sub
+        .setName("approver-add")
+        .setDescription(
+          "Allow a role to approve/reject requests."
+        )
+        .addRoleOption(option =>
+          option
+            .setName("role")
+            .setDescription(
+              "Approver role."
+            )
+            .setRequired(true)
+        )
+    )
+
+    // Approver remove
+    .addSubcommand(sub =>
+      sub
+        .setName("approver-remove")
+        .setDescription(
+          "Remove a role from approvers."
+        )
+        .addRoleOption(option =>
+          option
+            .setName("role")
+            .setDescription(
+              "Role to remove."
+            )
+            .setRequired(true)
+        )
+    )
+
+    // Variable role add
+    .addSubcommand(sub =>
+      sub
+        .setName("variable-role-add")
+        .setDescription(
+          "Allow a role to use starting variables."
+        )
+        .addRoleOption(option =>
+          option
+            .setName("role")
+            .setDescription(
+              "Variable allowed role."
+            )
+            .setRequired(true)
+        )
+    )
+
+    // Variable role remove
+    .addSubcommand(sub =>
+      sub
+        .setName("variable-role-remove")
+        .setDescription(
+          "Remove a variable allowed role."
+        )
+        .addRoleOption(option =>
+          option
+            .setName("role")
+            .setDescription(
+              "Role to remove."
+            )
+            .setRequired(true)
+        )
+    )
+
+    // Variable protection
+    .addSubcommand(sub =>
+      sub
+        .setName("variable-protection")
+        .setDescription(
+          "Enable or disable variable protection."
+        )
+        .addBooleanOption(option =>
+          option
+            .setName("enabled")
+            .setDescription(
+              "Enable variable protection?"
+            )
+            .setRequired(true)
+        )
+    )
+
+    // Show config
+    .addSubcommand(sub =>
+      sub
+        .setName("show")
+        .setDescription(
+          "Show current nickname configuration."
+        )
+    ),
+
+  // ==========================================================
+  // /nickpanel
+  // ==========================================================
+
+  new SlashCommandBuilder()
+    .setName("nickpanel")
+    .setDescription(
+      "Send nickname request panel."
+    )
+    .setDefaultMemberPermissions(
+      PermissionsBitField.Flags.Administrator.toString()
+    )
+    .addChannelOption(option =>
+      option
+        .setName("channel")
+        .setDescription(
+          "Channel where panel should be sent."
+        )
+        .addChannelTypes(
+          ChannelType.GuildText
+        )
+        .setRequired(false)
+    )
+
+].map(command =>
+  command.toJSON()
+);
+
+// ============================================================
+// REGISTER COMMANDS
+// ============================================================
+
+async function registerCommands() {
+
+  try {
+
+    const rest =
+      new REST({
+        version: "10"
+      }).setToken(TOKEN);
+
+    await rest.put(
+      Routes.applicationCommands(
+        client.user.id
+      ),
+      {
+        body: commands
+      }
+    );
+
+    console.log(
+      "✅ Global slash commands registered."
+    );
+
+  } catch (error) {
+
+    console.error(
+      "❌ Slash command registration failed:",
+      error
+    );
+  }
+}
+
+// ============================================================
+// SCAN SERVER MEMBERS
+// ============================================================
+
+async function scanGuildMembers(
+  guild
+) {
+
+  try {
+
+    const config =
+      getGuildConfig(guild.id);
+
+    if (!config.variableProtection) {
+      return;
+    }
+
+    console.log(
+      `🔎 Scanning members in ${guild.name}...`
+    );
+
+    const members =
+      await guild.members.fetch();
+
+    let changed = 0;
+
+    for (const member of members.values()) {
+
+      if (member.user.bot) {
+        continue;
+      }
+
+      if (!member.nickname) {
+        continue;
+      }
+
+      if (
+        canUseStartingVariable(
+          member,
+          config
+        )
+      ) {
+        continue;
+      }
+
+      const cleanNickname =
+        removeStartingVariables(
+          member.nickname
+        );
+
+      if (!cleanNickname) {
+        continue;
+      }
+
+      if (
+        cleanNickname ===
+        member.nickname
+      ) {
+        continue;
+      }
+
+      const botMember =
+        guild.members.me;
+
+      if (!botMember) {
+        continue;
+      }
+
+      if (
+        member.roles.highest.position >=
+        botMember.roles.highest.position
+      ) {
+        continue;
+      }
+
+      const oldNickname =
+        member.nickname;
+
+      try {
+
+        await member.setNickname(
+          cleanNickname,
+          "Initial nickname protection scan"
+        );
+
+        changed++;
+
+        console.log(
+          `🧹 ${guild.name} | ${member.user.tag}: ${oldNickname} -> ${cleanNickname}`
+        );
+
+        await sendAutoRemoveLog(
+          guild,
+          config,
+          member,
+          oldNickname,
+          cleanNickname
+        );
+
+      } catch (error) {
+
+        console.error(
+          `❌ Could not change ${member.user.tag}:`,
+          error.message
+        );
+      }
+
+      // Small delay to avoid unnecessary API pressure
+      await new Promise(resolve =>
+        setTimeout(resolve, 250)
+      );
+    }
+
+    console.log(
+      `✅ Scan complete: ${guild.name} | Changed: ${changed}`
+    );
+
+  } catch (error) {
+
+    console.error(
+      `❌ Member scan failed for ${guild.name}:`,
+      error
+    );
+  }
+}
+
+// ============================================================
+// READY
+// ============================================================
+
+client.once(
+  "ready",
+  async () => {
+
+    console.log(
+      "========================================"
+    );
+
+    console.log(
+      `✅ Logged in as ${client.user.tag}`
+    );
+
+    console.log(
+      `🌐 Servers: ${client.guilds.cache.size}`
+    );
+
+    console.log(
+      "========================================"
+    );
+
+    client.user.setPresence({
+      activities: [
+        {
+          name:
+            "Nickname Management",
+          type:
+            ActivityType.Watching
+        }
+      ],
+      status: "online"
+    });
+
+    await registerCommands();
+
+    // Scan existing servers
+    for (
+      const guild of client.guilds.cache.values()
+    ) {
+
+      await scanGuildMembers(
+        guild
+      );
+    }
+  }
+);
+
+// ============================================================
+// INTERACTION CREATE
+// ============================================================
+
+client.on(
+  "interactionCreate",
+  async interaction => {
+
+    try {
+
+      // ========================================================
+      // SLASH COMMANDS
+      // ========================================================
+
+      if (
+        interaction.isChatInputCommand()
+      ) {
+
+        if (!interaction.guild) {
+
+          return interaction.reply({
+            content:
+              "❌ This command can only be used inside a server.",
+            ephemeral: true
+          });
+        }
+
+        const guild =
+          interaction.guild;
+
+        const member =
+          await guild.members.fetch(
+            interaction.user.id
+          ).catch(() => null);
+
+        if (!member) {
+
+          return interaction.reply({
+            content:
+              "❌ Could not find your server membership.",
+            ephemeral: true
+          });
+        }
+
+        if (!isAdmin(member)) {
+
+          return interaction.reply({
+            content:
+              "❌ Only server administrators can configure this bot.",
+            ephemeral: true
+          });
+        }
+
+        const config =
+          getGuildConfig(
+            guild.id
+          );
+
+        // ======================================================
+        // NICKSETUP
+        // ======================================================
+
+        if (
+          interaction.commandName ===
+          "nicksetup"
+        ) {
+
+          const sub =
+            interaction.options.getSubcommand();
+
+          // ----------------------------------------------------
+          // REQUEST CHANNEL
+          // ----------------------------------------------------
+
+          if (
+            sub ===
+            "request-channel"
+          ) {
+
+            const channel =
+              interaction.options.getChannel(
+                "channel"
+              );
+
+            config.requestChannelId =
+              channel.id;
+
+            saveConfigs();
+
+            return interaction.reply({
+              content:
+                `✅ Nickname request channel set to ${channel}.`,
+              ephemeral: true
+            });
+          }
+
+          // ----------------------------------------------------
+          // LOG CHANNEL
+          // ----------------------------------------------------
+
+          if (
+            sub ===
+            "log-channel"
+          ) {
+
+            const channel =
+              interaction.options.getChannel(
+                "channel"
+              );
+
+            config.logChannelId =
+              channel.id;
+
+            saveConfigs();
+
+            return interaction.reply({
+              content:
+                `✅ Nickname log channel set to ${channel}.`,
+              ephemeral: true
+            });
+          }
+
+          // ----------------------------------------------------
+          // APPROVER ADD
+          // ----------------------------------------------------
+
+          if (
+            sub ===
+            "approver-add"
+          ) {
+
+            const role =
+              interaction.options.getRole(
+                "role"
+              );
+
+            if (
+              !config.approverRoleIds.includes(
+                role.id
+              )
+            ) {
+
+              config.approverRoleIds.push(
+                role.id
+              );
+            }
+
+            saveConfigs();
+
+            return interaction.reply({
+              content:
+                `✅ ${role} can now approve/reject nickname requests.`,
+              ephemeral: true
+            });
+          }
+
+          // ----------------------------------------------------
+          // APPROVER REMOVE
+          // ----------------------------------------------------
+
+          if (
+            sub ===
+            "approver-remove"
+          ) {
+
+            const role =
+              interaction.options.getRole(
+                "role"
+              );
+
+            config.approverRoleIds =
+              config.approverRoleIds.filter(
+                id =>
+                  id !== role.id
+              );
+
+            saveConfigs();
+
+            return interaction.reply({
+              content:
+                `✅ ${role} was removed from nickname approvers.`,
+              ephemeral: true
+            });
+          }
+
+          // ----------------------------------------------------
+          // VARIABLE ROLE ADD
+          // ----------------------------------------------------
+
+          if (
+            sub ===
+            "variable-role-add"
+          ) {
+
+            const role =
+              interaction.options.getRole(
+                "role"
+              );
+
+            if (
+              !config.variableAllowedRoleIds.includes(
+                role.id
+              )
+            ) {
+
+              config.variableAllowedRoleIds.push(
+                role.id
+              );
+            }
+
+            saveConfigs();
+
+            return interaction.reply({
+              content:
+                `✅ ${role} can use special characters/emoji at the START of nicknames.`,
+              ephemeral: true
+            });
+          }
+
+          // ----------------------------------------------------
+          // VARIABLE ROLE REMOVE
+          // ----------------------------------------------------
+
+          if (
+            sub ===
+            "variable-role-remove"
+          ) {
+
+            const role =
+              interaction.options.getRole(
+                "role"
+              );
+
+            config.variableAllowedRoleIds =
+              config.variableAllowedRoleIds.filter(
+                id =>
+                  id !== role.id
+              );
+
+            saveConfigs();
+
+            return interaction.reply({
+              content:
+                `✅ ${role} can no longer use starting variables.`,
+              ephemeral: true
+            });
+          }
+
+          // ----------------------------------------------------
+          // VARIABLE PROTECTION
+          // ----------------------------------------------------
+
+          if (
+            sub ===
+            "variable-protection"
+          ) {
+
+            const enabled =
+              interaction.options.getBoolean(
+                "enabled"
+              );
+
+            config.variableProtection =
+              enabled;
+
+            saveConfigs();
+
+            return interaction.reply({
+              content:
+                enabled
+                  ? "✅ Variable protection is now **ON**."
+                  : "⚠️ Variable protection is now **OFF**.",
+              ephemeral: true
+            });
+          }
+
+          // ----------------------------------------------------
+          // SHOW
+          // ----------------------------------------------------
+
+          if (
+            sub ===
+            "show"
+          ) {
+
+            const approvers =
+              config.approverRoleIds.length
+                ? config.approverRoleIds
+                    .map(
+                      id =>
+                        `<@&${id}>`
+                    )
+                    .join(", ")
+                : "Not configured";
+
+            const variableRoles =
+              config.variableAllowedRoleIds.length
+                ? config.variableAllowedRoleIds
+                    .map(
+                      id =>
+                        `<@&${id}>`
+                    )
+                    .join(", ")
+                : "No roles configured";
+
+            const embed =
+              new EmbedBuilder()
+                .setColor(0x2bafff)
+                .setTitle(
+                  "⚙️ Nickname System Configuration"
+                )
+                .addFields(
+                  {
+                    name:
+                      "📝 Request Channel",
+                    value:
+                      config.requestChannelId
+                        ? `<#${config.requestChannelId}>`
+                        : "Not configured"
+                  },
+                  {
+                    name:
+                      "📋 Log Channel",
+                    value:
+                      config.logChannelId
+                        ? `<#${config.logChannelId}>`
+                        : "Not configured"
+                  },
+                  {
+                    name:
+                      "👮 Approver Roles",
+                    value:
+                      approvers
+                  },
+                  {
+                    name:
+                      "✨ Variable Allowed Roles",
+                    value:
+                      variableRoles
+                  },
+                  {
+                    name:
+                      "🛡️ Variable Protection",
+                    value:
+                      config.variableProtection
+                        ? "🟢 Enabled"
+                        : "🔴 Disabled"
+                  }
+                )
+                .setFooter(
+                  footer()
+                )
+                .setTimestamp();
+
+            return interaction.reply({
+              embeds: [embed],
+              ephemeral: true
+            });
+          }
+        }
+
+        // ======================================================
+        // NICKPANEL
+        // ======================================================
+
+        if (
+          interaction.commandName ===
+          "nickpanel"
+        ) {
+
+          const selectedChannel =
+            interaction.options.getChannel(
+              "channel"
+            );
+
+          const channel =
+            selectedChannel ||
+            (
+              config.requestChannelId
+                ? guild.channels.cache.get(
+                    config.requestChannelId
+                  )
+                : null
+            );
+
+          if (!channel) {
+
+            return interaction.reply({
+              content:
+                "❌ Request channel is not configured.\nUse `/nicksetup request-channel` first.",
+              ephemeral: true
+            });
+          }
+
+          const embed =
+            new EmbedBuilder()
+              .setColor(0x2bafff)
+              .setTitle(
+                "📝 Nickname Change"
+              )
+              .setDescription(
+                [
+                  "Send your requested nickname in this channel.",
+                  "",
+                  "**No command or prefix is required.**",
+                  "",
+                  "Example:",
+                  "`Shakin Ahmed`",
+                  "",
+                  "Your nickname request will be sent to the configured moderators.",
+                  "",
+                  "⚠️ Members without a Variable Allowed Role cannot use special characters/emoji at the **beginning** of their nickname.",
+                  "",
+                  "Special characters in the **middle or end** are allowed."
+                ].join("\n")
+              )
+              .setFooter(
+                footer()
+              )
+              .setTimestamp();
+
+          await channel.send({
+            embeds: [embed]
+          });
+
+          return interaction.reply({
+            content:
+              `✅ Nickname panel sent to ${channel}.`,
+            ephemeral: true
+          });
+        }
+
+        return;
+      }
+
+      // ========================================================
+      // BUTTONS
+      // ========================================================
+
+      if (
+        interaction.isButton()
+      ) {
+
+        const customId =
+          interaction.customId;
+
+        if (
+          !customId.startsWith(
+            "nick_accept_"
+          ) &&
+          !customId.startsWith(
+            "nick_reject_"
+          )
+        ) {
+          return;
+        }
+
+        const requestId =
+          customId.startsWith(
+            "nick_accept_"
+          )
+            ? customId.replace(
+                "nick_accept_",
+                ""
+              )
+            : customId.replace(
+                "nick_reject_",
+                ""
+              );
+
+        const request =
+          pendingRequests.get(
+            requestId
+          );
+
+        if (!request) {
+
+          return interaction.reply({
+            content:
+              "⚠️ This nickname request is no longer active.",
+            ephemeral: true
+          });
+        }
+
+        const guild =
+          interaction.guild;
+
+        if (!guild) {
+
+          return interaction.reply({
+            content:
+              "❌ This request is no longer associated with a server.",
+            ephemeral: true
+          });
+        }
+
+        // Prevent cross-server request processing
+        if (
+          request.guildId !==
+          guild.id
+        ) {
+
+          return interaction.reply({
+            content:
+              "❌ This request belongs to another server.",
+            ephemeral: true
+          });
+        }
+
+        const config =
+          getGuildConfig(
+            guild.id
+          );
+
+        const moderator =
+          await guild.members.fetch(
+            interaction.user.id
+          ).catch(() => null);
+
+        if (!moderator) {
+
+          return interaction.reply({
+            content:
+              "❌ Could not find your server membership.",
+            ephemeral: true
+          });
+        }
+
+        if (
+          !canApprove(
+            moderator,
+            config
+          )
+        ) {
+
+          return interaction.reply({
+            content:
+              "❌ You do not have permission to approve or reject nickname requests.",
+            ephemeral: true
+          });
+        }
+
+        if (
+          request.status !==
+          "pending"
+        ) {
+
+          return interaction.reply({
+            content:
+              "⚠️ This request has already been processed.",
+            ephemeral: true
+          });
+        }
+
+        request.status =
+          "processing";
+
+        await interaction.deferUpdate();
+
+        const member =
+          await guild.members.fetch(
+            request.userId
+          ).catch(() => null);
+
+        if (!member) {
+
+          pendingRequests.delete(
+            requestId
+          );
+
+          return interaction.message.edit({
+            content:
+              "❌ Member is no longer in this server.",
+            components: []
+          });
+        }
+
+        // ======================================================
+        // APPROVE
+        // ======================================================
+
+        if (
+          customId.startsWith(
+            "nick_accept_"
+          )
+        ) {
+
+          try {
+
+            const botMember =
+              guild.members.me;
+
+            if (!botMember) {
+              throw new Error(
+                "Bot member unavailable."
+              );
+            }
+
+            if (
+              member.id ===
+              guild.ownerId
+            ) {
+
+              throw new Error(
+                "Cannot change server owner's nickname."
+              );
+            }
+
+            if (
+              member.roles.highest.position >=
+              botMember.roles.highest.position
+            ) {
+
+              throw new Error(
+                "Member role is too high."
+              );
+            }
+
+            const key =
+              historyKey(
+                guild.id,
+                member.id
+              );
+
+            nickHistory[key] = {
+              guildId:
+                guild.id,
+              userId:
+                member.id,
+              nickname:
+                member.nickname ||
+                member.user.username,
+              savedAt:
+                Date.now()
+            };
+
+            saveHistory();
+
+            await member.setNickname(
+              request.finalNickname,
+              `Nickname request ${requestId} approved by ${interaction.user.tag}`
+            );
+
+            request.status =
+              "approved";
+
+            const embed =
+              new EmbedBuilder()
+                .setColor(0x4dff88)
+                .setTitle(
+                  "✅ Nickname Request Approved"
+                )
+                .setThumbnail(
+                  member.displayAvatarURL({
+                    extension: "png",
+                    size: 256
+                  })
+                )
+                .addFields(
+                  {
+                    name: "👤 User",
+                    value: `${member}`,
+                    inline: true
+                  },
+                  {
+                    name: "👮 Moderator",
+                    value: `${moderator}`,
+                    inline: true
+                  },
+                  {
+                    name: "🆔 Request ID",
+                    value: requestId,
+                    inline: true
+                  },
+                  {
+                    name: "🧾 Old Nickname",
+                    value:
+                      request.oldNickname ||
+                      member.user.username
+                  },
+                  {
+                    name: "🆕 New Nickname",
+                    value:
+                      request.finalNickname
+                  },
+                  {
+                    name: "📌 Status",
+                    value:
+                      "🟢 Approved"
+                  }
+                )
+                .setFooter(
+                  footer()
+                )
+                .setTimestamp();
+
+            await interaction.message.edit({
+              content:
+                "✅ Request approved.",
+              embeds: [embed],
+              components: []
+            });
+
+            // Edit original user message
+            if (
+              config.requestChannelId
+            ) {
+
+              const requestChannel =
+                guild.channels.cache.get(
+                  config.requestChannelId
+                );
+
+              if (requestChannel) {
+
+                const userMessage =
+                  await requestChannel.messages
+                    .fetch(
+                      request.userMessageId
+                    )
+                    .catch(() => null);
+
+                if (userMessage) {
+
+                  await userMessage.edit({
+                    embeds: [embed],
+                    components: []
+                  }).catch(() => {});
+                }
+              }
+            }
+
+            // DM
+            await member.send({
+              embeds: [embed]
+            }).catch(() => {});
+
+            // Log
+            await sendLog(
+              guild,
+              config,
+              embed
+            );
+
+            pendingRequests.delete(
+              requestId
+            );
+
+          } catch (error) {
+
+            console.error(
+              "❌ Approve error:",
+              error
+            );
+
+            request.status =
+              "failed";
+
+            const errorEmbed =
+              new EmbedBuilder()
+                .setColor(0xff4e4e)
+                .setTitle(
+                  "❌ Nickname Change Failed"
+                )
+                .setDescription(
+                  `The nickname could not be changed.\n\n**Reason:** ${error.message}`
+                )
+                .setFooter(
+                  footer()
+                )
+                .setTimestamp();
+
+            await interaction.message.edit({
+              content:
+                "❌ Nickname change failed.",
+              embeds: [errorEmbed],
+              components: []
+            });
+          }
+
+          return;
+        }
+
+        // ======================================================
+        // REJECT
+        // ======================================================
+
+        if (
+          customId.startsWith(
+            "nick_reject_"
+          )
+        ) {
+
+          request.status =
+            "rejected";
+
+          const embed =
+            new EmbedBuilder()
+              .setColor(0xff4e4e)
+              .setTitle(
+                "❌ Nickname Request Rejected"
+              )
+              .setThumbnail(
+                member.displayAvatarURL({
+                  extension: "png",
+                  size: 256
+                })
+              )
+              .addFields(
+                {
+                  name: "👤 User",
+                  value: `${member}`,
+                  inline: true
+                },
+                {
+                  name: "👮 Moderator",
+                  value: `${moderator}`,
+                  inline: true
+                },
+                {
+                  name: "🆔 Request ID",
+                  value: requestId,
+                  inline: true
+                },
+                {
+                  name: "🧾 Current Nickname",
+                  value:
+                    request.oldNickname ||
+                    member.user.username
+                },
+                {
+                  name: "🆕 Requested Nickname",
+                  value:
+                    request.requestedNickname
+                },
+                {
+                  name: "📌 Status",
+                  value:
+                    "🔴 Rejected"
+                }
+              )
+              .setFooter(
+                footer()
+              )
+              .setTimestamp();
+
+          await interaction.message.edit({
+            content:
+              "❌ Request rejected.",
+            embeds: [embed],
+            components: []
+          });
+
+          // Edit original message
+          if (
+            config.requestChannelId
+          ) {
+
+            const requestChannel =
+              guild.channels.cache.get(
+                config.requestChannelId
+              );
+
+            if (requestChannel) {
+
+              const userMessage =
+                await requestChannel.messages
+                  .fetch(
+                    request.userMessageId
+                  )
+                  .catch(() => null);
+
+              if (userMessage) {
+
+                await userMessage.edit({
+                  embeds: [embed],
+                  components: []
+                }).catch(() => {});
+              }
+            }
+          }
+
+          // DM
+          await member.send({
+            embeds: [embed]
+          }).catch(() => {});
+
+          // Log
+          await sendLog(
+            guild,
+            config,
+            embed
+          );
+
+          pendingRequests.delete(
+            requestId
+          );
+
+          return;
+        }
+      }
+
+    } catch (error) {
+
+      console.error(
+        "❌ Interaction error:",
+        error
+      );
+
+      try {
+
+        if (
+          interaction.replied ||
+          interaction.deferred
+        ) {
+
+          await interaction.followUp({
+            content:
+              "❌ An unexpected error occurred.",
+            ephemeral: true
+          });
+
+        } else {
+
+          await interaction.reply({
+            content:
+              "❌ An unexpected error occurred.",
+            ephemeral: true
+          });
+        }
+
+      } catch {}
+    }
+  }
+);
+
+// ============================================================
+// MESSAGE CREATE
+// ============================================================
+//
+// User simply types:
+//
+// Shakin Ahmed
+//
+// No command required.
+// ============================================================
+
+client.on(
+  "messageCreate",
+  async message => {
+
+    try {
+
+      if (!message.guild) {
+        return;
+      }
+
+      if (message.author.bot) {
+        return;
+      }
+
+      const guild =
+        message.guild;
+
+      const config =
+        getGuildConfig(
+          guild.id
+        );
+
+      // Only configured request channel
+      if (
+        !config.requestChannelId ||
+        message.channel.id !==
+          config.requestChannelId
+      ) {
+        return;
+      }
+
+      const member =
+        await guild.members.fetch(
+          message.author.id
+        ).catch(() => null);
+
+      if (!member) {
+        return;
+      }
+
+      const requestedNickname =
+        message.content.trim();
+
+      if (!requestedNickname) {
+        return;
+      }
+
+      // ======================================================
+      // NORMALIZE
+      // ======================================================
+
+      const finalNickname =
+        normalizeNickname(
+          member,
+          requestedNickname,
+          config
+        );
+
+      if (!finalNickname) {
+
+        await message.reply({
+          content:
+            "❌ Your nickname must contain at least one letter or number."
+        }).catch(() => {});
+
+        return;
+      }
+
+      // ======================================================
+      // VALIDATE
+      // ======================================================
+
+      const validationError =
+        validateNickname(
+          finalNickname
+        );
+
+      if (validationError) {
+
+        await message.reply({
+          content:
+            validationError
+        }).catch(() => {});
+
+        return;
+      }
+
+      // ======================================================
+      // BOT HIERARCHY
+      // ======================================================
+
+      const botMember =
+        guild.members.me;
+
+      if (!botMember) {
+        return;
+      }
+
+      if (
+        member.id ===
+        guild.ownerId
+      ) {
+
+        await message.reply({
+          content:
+            "❌ I cannot change the server owner's nickname."
+        }).catch(() => {});
+
+        return;
+      }
+
+      if (
+        member.roles.highest.position >=
+        botMember.roles.highest.position
+      ) {
+
+        await message.reply({
+          content:
+            "❌ I cannot change your nickname because your highest role is equal to or higher than my highest role."
+        }).catch(() => {});
+
+        return;
+      }
+
+      // ======================================================
+      // REQUEST ID
+      // ======================================================
+
+      const requestId =
+        createRequestId();
+
+      const oldNickname =
+        member.nickname ||
+        member.user.username;
+
+      const variableRemoved =
+        requestedNickname !==
+        finalNickname;
+
+      const submittedAt =
+        Math.floor(
+          Date.now() / 1000
+        );
+
+      // ======================================================
+      // REQUEST EMBED
+      // ======================================================
+
+      const requestEmbed =
+        new EmbedBuilder()
+          .setColor(0x2bafff)
+          .setTitle(
+            "📝 Nickname Change Request"
+          )
+          .setThumbnail(
+            member.displayAvatarURL({
+              extension: "png",
+              size: 256
+            })
+          )
+          .addFields(
+            {
+              name: "👤 User",
+              value: `${member}`,
+              inline: true
+            },
+            {
+              name: "🆔 Request ID",
+              value: requestId,
+              inline: true
+            },
+            {
+              name: "🧾 Current Nickname",
+              value: oldNickname
+            },
+            {
+              name: "🆕 Requested Nickname",
+              value:
+                requestedNickname
+            },
+            {
+              name: "✅ Final Nickname",
+              value:
+                finalNickname
+            },
+            {
+              name:
+                "✨ Starting Variable",
+              value:
+                variableRemoved
+                  ? "⚠️ Removed automatically"
+                  : "None",
+              inline: true
+            },
+            {
+              name: "📌 Status",
+              value:
+                "🟡 Pending Review",
+              inline: true
+            },
+            {
+              name: "⏱️ Submitted",
+              value:
+                `<t:${submittedAt}:F>`
+            }
+          )
+          .setFooter({
+            text:
+              "Waiting for an authorized moderator to approve or reject."
+          })
+          .setTimestamp();
+
+      // ======================================================
+      // USER REPLY
+      // ======================================================
+
+      const userReply =
+        await message.reply({
+          embeds: [
+            requestEmbed
+          ],
+          allowedMentions: {
+            users: []
+          }
+        });
+
+      // ======================================================
+      // BUTTONS
+      // ======================================================
+
+      const buttons =
+        new ActionRowBuilder()
+          .addComponents(
+
+            new ButtonBuilder()
+              .setCustomId(
+                `nick_accept_${requestId}`
+              )
+              .setLabel(
+                "Approve"
+              )
+              .setEmoji(
+                "✅"
+              )
+              .setStyle(
+                ButtonStyle.Success
+              ),
+
+            new ButtonBuilder()
+              .setCustomId(
+                `nick_reject_${requestId}`
+              )
+              .setLabel(
+                "Reject"
+              )
+              .setEmoji(
+                "❌"
+              )
+              .setStyle(
+                ButtonStyle.Danger
+              )
+          );
+
+      // ======================================================
+      // LOG CHANNEL
+      // ======================================================
+
+      const logChannel =
+        config.logChannelId
+          ? guild.channels.cache.get(
+              config.logChannelId
+            )
+          : null;
+
+      if (!logChannel) {
+
+        await userReply.edit({
+          embeds: [
+            new EmbedBuilder()
+              .setColor(
+                0xffb84d
+              )
+              .setTitle(
+                "⚠️ Nickname System Not Configured"
+              )
+              .setDescription(
+                "The nickname log channel has not been configured by the server administrator."
+              )
+              .setFooter(
+                footer()
+              )
+              .setTimestamp()
+          ]
+        }).catch(() => {});
+
+        return;
+      }
+
+      // ======================================================
+      // APPROVER ROLE MENTIONS
+      // ======================================================
+
+      const roleMentions =
+        config.approverRoleIds.length
+          ? config.approverRoleIds
+              .map(
+                id =>
+                  `<@&${id}>`
+              )
+              .join(" ")
+          : "";
+
+      // ======================================================
+      // SEND MODERATOR REQUEST
+      // ======================================================
+
+      const moderatorMessage =
+        await logChannel.send({
+
+          content:
+            roleMentions
+              ? `${roleMentions}\n🔔 **New nickname change request.**`
+              : "🔔 **New nickname change request.**",
+
+          embeds: [
+            requestEmbed
+          ],
+
+          components: [
+            buttons
+          ],
+
+          allowedMentions: {
+            roles:
+              config.approverRoleIds
+          }
+        });
+
+      // ======================================================
+      // SAVE REQUEST
+      // ======================================================
+
+      pendingRequests.set(
+        requestId,
+        {
+          guildId:
+            guild.id,
+
+          userId:
+            member.id,
+
+          oldNickname,
+
+          requestedNickname,
+
+          finalNickname,
+
+          userMessageId:
+            userReply.id,
+
+          moderatorMessageId:
+            moderatorMessage.id,
+
+          status:
+            "pending",
+
+          createdAt:
+            Date.now()
+        }
+      );
+
+      // ======================================================
+      // EXPIRE AFTER 3 HOURS
+      // ======================================================
+
+      setTimeout(
+        async () => {
+
+          const request =
+            pendingRequests.get(
+              requestId
+            );
+
+          if (!request) {
+            return;
+          }
+
+          if (
+            request.status !==
+            "pending"
+          ) {
+            return;
+          }
+
+          request.status =
+            "expired";
+
+          pendingRequests.delete(
+            requestId
+          );
+
+          const expiredEmbed =
+            new EmbedBuilder()
+              .setColor(
+                0x808080
+              )
+              .setTitle(
+                "⌛ Nickname Request Expired"
+              )
+              .setDescription(
+                "This nickname request was not processed within 3 hours."
+              )
+              .addFields({
+                name:
+                  "🆔 Request ID",
+                value:
+                  requestId
+              })
+              .setFooter(
+                footer()
+              )
+              .setTimestamp();
+
+          await moderatorMessage.edit({
+            content:
+              "⌛ Request expired.",
+            embeds: [
+              expiredEmbed
+            ],
+            components: []
+          }).catch(() => {});
+
+          await userReply.edit({
+            embeds: [
+              expiredEmbed
+            ],
+            components: []
+          }).catch(() => {});
+
+        },
+        3 * 60 * 60 * 1000
+      );
+
+    } catch (error) {
+
+      console.error(
+        "❌ messageCreate error:",
+        error
+      );
+    }
+  }
+);
+
+// ============================================================
+// AUTOMATIC STARTING VARIABLE PROTECTION
+// ============================================================
+
+client.on(
+  "guildMemberUpdate",
+  async (
+    oldMember,
+    newMember
+  ) => {
+
+    try {
+
+      // Only react when nickname actually changed
+      if (
+        oldMember.nickname ===
+        newMember.nickname
+      ) {
+        return;
+      }
+
+      const config =
+        getGuildConfig(
+          newMember.guild.id
+        );
+
+      if (
+        !config.variableProtection
+      ) {
+        return;
+      }
+
+      if (!newMember.nickname) {
+        return;
+      }
+
+      if (
+        canUseStartingVariable(
+          newMember,
+          config
+        )
+      ) {
+        return;
+      }
+
+      const cleanNickname =
+        removeStartingVariables(
+          newMember.nickname
+        );
+
+      if (!cleanNickname) {
+        return;
+      }
+
+      if (
+        cleanNickname ===
+        newMember.nickname
+      ) {
+        return;
+      }
+
+      const botMember =
+        newMember.guild.members.me;
+
+      if (!botMember) {
+        return;
+      }
+
+      if (
+        newMember.id ===
+        newMember.guild.ownerId
+      ) {
+        return;
+      }
+
+      if (
+        newMember.roles.highest.position >=
+        botMember.roles.highest.position
+      ) {
+        return;
+      }
+
+      const oldNickname =
+        newMember.nickname;
+
+      await newMember.setNickname(
+        cleanNickname,
+        "Removed unauthorized starting variables"
+      );
+
+      console.log(
+        `🧹 Removed starting variable from ${newMember.user.tag} in ${newMember.guild.name}`
+      );
+
+      await sendAutoRemoveLog(
+        newMember.guild,
+        config,
+        newMember,
+        oldNickname,
+        cleanNickname
+      );
+
+    } catch (error) {
+
+      console.error(
+        "❌ Auto nickname protection error:",
+        error
+      );
+    }
+  }
+);
+
+// ============================================================
+// GUILD CREATE
 // ============================================================
 
 client.on(
   "guildCreate",
   async guild => {
 
-    console.log(
-      `➕ Joined server: ${guild.name} (${guild.id})`
-    );
+    try {
 
-    // Create separate config for this server
-    const config =
       getGuildConfig(
         guild.id
       );
 
-    config.initialScanCompleted =
-      false;
+      console.log(
+        `➕ Joined server: ${guild.name} (${guild.id})`
+      );
 
-    saveConfigs();
+      // Automatically scan existing members
+      await scanGuildMembers(
+        guild
+      );
 
-    // Give Discord a little time before fetching members
-    await sleep(3000);
+    } catch (error) {
 
-    // Automatically scan existing members
-    await scanExistingMembers(
-      guild
-    );
+      console.error(
+        "❌ Guild join scan error:",
+        error
+      );
+    }
   }
 );
 
 // ============================================================
-// BOT REMOVED FROM SERVER
+// GUILD DELETE
 // ============================================================
 
 client.on(
   "guildDelete",
   guild => {
-
-    // Remove this server's configuration
-    // so no data is shared with other servers.
 
     if (
       guildConfigs[guild.id]
@@ -2409,13 +2480,13 @@ client.on(
     }
 
     console.log(
-      `➖ Removed server configuration: ${guild.name}`
+      `➖ Removed configuration for: ${guild.name}`
     );
   }
 );
 
 // ============================================================
-// EXPRESS
+// EXPRESS SERVER
 // ============================================================
 
 const app =
@@ -2436,7 +2507,6 @@ app.get(
   (req, res) => {
 
     res.status(200).json({
-
       status:
         "online",
 
@@ -2455,7 +2525,8 @@ app.get(
 );
 
 const PORT =
-  process.env.PORT || 3000;
+  process.env.PORT ||
+  3000;
 
 app.listen(
   PORT,
@@ -2497,10 +2568,12 @@ process.on(
 // SHUTDOWN
 // ============================================================
 
-function shutdown(signal) {
+function shutdown(
+  signal
+) {
 
   console.log(
-    `\n🛑 ${signal} received. Saving data...`
+    `🛑 ${signal} received. Saving data...`
   );
 
   saveConfigs();
@@ -2513,16 +2586,24 @@ function shutdown(signal) {
 
 process.on(
   "SIGINT",
-  () => shutdown("SIGINT")
+  () =>
+    shutdown("SIGINT")
 );
 
 process.on(
   "SIGTERM",
-  () => shutdown("SIGTERM")
+  () =>
+    shutdown("SIGTERM")
 );
 
 // ============================================================
 // LOGIN
 // ============================================================
 
-client.login(TOKEN);
+console.log(
+  "🔐 Starting Discord bot..."
+);
+
+client.login(
+  TOKEN
+);
