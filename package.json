@@ -1,12 +1,11 @@
 {
-  "name": "nickname-bot",
-  "version": "1.0.0",
+  "name": "nickname-management-bot",
+  "version": "2.0.0",
   "private": false,
-  "description": "A Discord nickname auto-change bot with history and approval system",
+  "description": "Public multi-server Discord nickname management bot",
   "main": "nicknameBot.js",
   "scripts": {
-    "start": "node nicknameBot.js",
-    "dev": "nodemon nicknameBot.js"
+    "start": "node nicknameBot.js"
   },
   "dependencies": {
     "discord.js": "^14.15.3",
